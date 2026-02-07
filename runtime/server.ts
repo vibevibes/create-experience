@@ -35,6 +35,34 @@ interface ToolEvent {
 // ── State (single room) ────────────────────────────────────
 
 const ROOM_ID = "local";
+const PORT = parseInt(process.env.PORT || "4321");
+
+let publicUrl: string | null = null;
+let roomToken: string | null = null;
+
+/** Set the public tunnel URL (called from dev.ts when --share is active). */
+export function setPublicUrl(url: string) {
+  publicUrl = url;
+}
+
+/** Set the room token for share-mode authentication (called from dev.ts when --share is active). */
+export function setRoomToken(token: string) {
+  roomToken = token;
+}
+
+/** Get the base URL clients should use (tunnel URL if sharing, localhost otherwise). */
+export function getBaseUrl(): string {
+  return publicUrl || `http://localhost:${PORT}`;
+}
+
+/** Get the base URL with token appended (for sharing with others). */
+function getAuthenticatedUrl(): string {
+  const base = getBaseUrl();
+  if (roomToken) {
+    return `${base}?token=${roomToken}`;
+  }
+  return base;
+}
 
 let sharedState: Record<string, any> = {};
 const participants = new Map<string, { type: "human" | "ai"; joinedAt: number }>();
@@ -137,6 +165,27 @@ app.use((_req, res, next) => {
   next();
 });
 
+// ── Room token auth middleware (only active when --share sets a token) ──
+app.use((req, res, next) => {
+  if (!roomToken) { next(); return; }
+
+  // GET endpoints remain open — viewers, state polling, bundles, screenshots
+  if (req.method === "GET" || req.method === "OPTIONS") { next(); return; }
+
+  // All POST (mutation) endpoints require token
+  const queryToken = req.query.token as string | undefined;
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+  const provided = queryToken || bearerToken;
+
+  if (provided !== roomToken) {
+    res.status(401).json({ error: "Invalid or missing room token" });
+    return;
+  }
+
+  next();
+});
+
 // Serve viewer
 app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "viewer", "index.html"));
@@ -181,7 +230,7 @@ function handleJoin(req: express.Request, res: express.Response) {
     participants: participantList(),
     events: events.slice(-20),
     tools: getToolList(experience),
-    browserUrl: `http://localhost:${PORT}`,
+    browserUrl: getBaseUrl(),
   });
 }
 
@@ -367,7 +416,7 @@ app.get("/screenshot", (req, res) => {
   }
 
   if (!viewerWs) {
-    res.status(503).json({ error: "No browser viewer connected. Open http://localhost:4321 first." });
+    res.status(503).json({ error: `No browser viewer connected. Open ${getBaseUrl()} first.` });
     return;
   }
 
@@ -471,9 +520,28 @@ app.get("/rooms/:roomId/bundle", (_req, res) => {
   res.send(clientBundle);
 });
 
-// ── Start server ───────────────────────────────────────────
+// ── MCP config (for remote joiners) ───────────────────────
 
-const PORT = parseInt(process.env.PORT || "4321");
+app.get("/mcp-config", (_req, res) => {
+  const serverUrl = getAuthenticatedUrl();
+  res.json({
+    mcpServers: {
+      "vibevibes-remote": {
+        command: "npx",
+        args: ["-y", "@vibevibes/mcp@latest"],
+        env: {
+          VIBEVIBES_SERVER_URL: serverUrl,
+        },
+      },
+    },
+    instructions: [
+      `Add the above to your .mcp.json to join this room.`,
+      `Or run: npx @vibevibes/mcp@latest ${serverUrl}`,
+    ],
+  });
+});
+
+// ── Start server ───────────────────────────────────────────
 
 export async function startServer() {
   await loadExperience();
@@ -571,7 +639,14 @@ export async function startServer() {
     console.log(`\n  vibe-vibe local runtime`);
     console.log(`  ───────────────────────`);
     console.log(`  Viewer:  http://localhost:${PORT}`);
-    console.log(`  Watching src/index.tsx for changes\n`);
+    if (publicUrl) {
+      const shareUrl = getAuthenticatedUrl();
+      console.log(`  Share:   ${publicUrl}`);
+      console.log(`\n  Others can join your room:`);
+      console.log(`    Browser → ${shareUrl}`);
+      console.log(`    MCP     → npx @vibevibes/mcp ${shareUrl}`);
+    }
+    console.log(`\n  Watching src/index.tsx for changes\n`);
   });
 
   return server;

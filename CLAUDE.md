@@ -4,7 +4,7 @@
 
 ## IMPORTANT: Use the LOCAL MCP tools
 
-This project registers a **local** MCP server (`vibevibes-local` in `.mcp.json`). It exposes 4 tools: `connect`, `watch`, `act`, `memory`. These talk to the **local dev server** at http://localhost:4321.
+This project registers a **local** MCP server (`vibevibes` in `.mcp.json`) via the published `@vibevibes/mcp` npm package. It exposes 5 tools: `connect`, `watch`, `act`, `memory`, `screenshot`. These talk to the **local dev server** at http://localhost:4321.
 
 **DO NOT** use the hosted platform MCP tools (`vibevibes_list_experiences`, `vibevibes_create_room`, `vibevibes_execute_tool`, etc.) — those talk to the cloud. You want the local ones.
 
@@ -16,11 +16,11 @@ This project registers a **local** MCP server (`vibevibes-local` in `.mcp.json`)
 src/index.tsx          <- YOUR EXPERIENCE. This is the only file you edit.
 runtime/               <- Local dev runtime. Don't modify.
   server.ts            <- Express + WebSocket server
-  mcp.ts               <- Local MCP server (4 tools)
-  bundler.ts            <- esbuild bundler
-  viewer/index.html     <- Browser viewer
+  tunnel.ts            <- Cloudflare Tunnel for --share mode
+  bundler.ts           <- esbuild bundler
+  viewer/index.html    <- Browser viewer
 vibevibes.json         <- Experience ID + platform URL
-.mcp.json              <- Auto-registers local MCP with Claude Code
+.mcp.json              <- Auto-registers vibevibes-mcp with Claude Code
 ```
 
 ---
@@ -29,6 +29,7 @@ vibevibes.json         <- Experience ID + platform URL
 
 ```bash
 npm run dev                  # Start local server on http://localhost:4321
+npm run dev:share            # Local + Cloudflare Tunnel (anyone can join via URL)
 npm run build                # Bundle (check for errors)
 npm run publish:experience   # Upload to hosted platform
 ```

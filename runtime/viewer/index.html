@@ -170,7 +170,8 @@
     // ── Connect to the experience ─────────────────────────────
 
     const SERVER = location.origin;
-    const WS_URL = `ws://${location.host}`;
+    const WS_PROTO = location.protocol === "https:" ? "wss:" : "ws:";
+    const WS_URL = `${WS_PROTO}//${location.host}`;
 
     function showError(msg) {
       document.getElementById("loading").style.display = "none";
