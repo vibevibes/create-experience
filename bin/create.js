@@ -5,8 +5,7 @@
  *
  * Usage:
  *   npx create-experience my-app
- *   npx create-experience my-app --template counter
- *   npm init experience my-app
+ *   npx create-experience my-app --template dungeon
  */
 
 import fs from "fs";
@@ -17,18 +16,36 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_DIR = path.resolve(__dirname, "..");
 
-const name = process.argv[2];
+const TEMPLATES = ["vibe-studio", "worldbuilder", "dashboard", "dungeon"];
 
-if (!name || name.startsWith("-")) {
+// Parse args: <name> [--template <template>]
+const args = process.argv.slice(2);
+const templateIdx = args.indexOf("--template");
+const template = templateIdx !== -1 ? args[templateIdx + 1] : "vibe-studio";
+
+// Skip flags and flag values when finding the project name
+const flagValues = new Set();
+if (templateIdx !== -1) { flagValues.add(templateIdx); flagValues.add(templateIdx + 1); }
+const name = args.find((a, i) => !a.startsWith("-") && !flagValues.has(i));
+
+if (!name) {
   console.log(`
-  Usage: npx create-experience <project-name>
+  Usage: npx @vibevibes/create-experience <project-name> [--template <template>]
+
+  Templates: ${TEMPLATES.join(", ")}
 
   Example:
-    npx create-experience my-app
+    npx @vibevibes/create-experience my-app
+    npx @vibevibes/create-experience my-app --template dungeon
     cd my-app
     npm run dev
 `);
-  process.exit(name ? 1 : 0);
+  process.exit(0);
+}
+
+if (!TEMPLATES.includes(template)) {
+  console.error(`\n  Error: Unknown template "${template}". Available: ${TEMPLATES.join(", ")}\n`);
+  process.exit(1);
 }
 
 const targetDir = path.resolve(process.cwd(), name);
@@ -38,25 +55,23 @@ if (fs.existsSync(targetDir)) {
   process.exit(1);
 }
 
-// Files/dirs to copy from the template
+// Files/dirs to copy from the package (runtime infra)
 const COPY = [
-  "src",
   "runtime",
   "scripts",
   "tsconfig.json",
   "CLAUDE.md",
 ];
 
-// Files to generate fresh (not copied)
+// Files to skip when copying directories
 const SKIP = [
   "node_modules",
   ".git",
   "bin",
   "package-lock.json",
-  "vibevibes.json",
 ];
 
-console.log(`\n  Creating experience: ${name}\n`);
+console.log(`\n  Creating experience: ${name} (template: ${template})\n`);
 
 // Create target directory
 fs.mkdirSync(targetDir, { recursive: true });
@@ -77,7 +92,7 @@ function copyDir(src, dest) {
   }
 }
 
-// Copy the template directories
+// Copy runtime infrastructure
 for (const item of COPY) {
   const srcPath = path.join(TEMPLATE_DIR, item);
   const destPath = path.join(targetDir, item);
@@ -91,6 +106,14 @@ for (const item of COPY) {
   }
 }
 
+// Copy all template source files into src/ (multi-file templates)
+const templateDir = path.join(TEMPLATE_DIR, "templates", template);
+if (fs.existsSync(templateDir)) {
+  const destSrc = path.join(targetDir, "src");
+  fs.mkdirSync(destSrc, { recursive: true });
+  copyDir(templateDir, destSrc);
+}
+
 // Generate fresh package.json with the project name
 const pkg = {
   name: name,
@@ -101,7 +124,7 @@ const pkg = {
     dev: "tsx scripts/dev.ts",
     "dev:share": "tsx scripts/dev.ts --share",
     build: "tsx runtime/bundler.ts",
-    "publish:experience": "tsx scripts/publish.ts",
+    test: "tsx scripts/test.ts",
   },
   dependencies: {
     "@vibevibes/sdk": "^0.1.0",
@@ -146,17 +169,6 @@ fs.writeFileSync(
   JSON.stringify(mcpConfig, null, 2) + "\n"
 );
 
-// Generate fresh vibevibes.json
-const vibevibesConfig = {
-  experienceId: name,
-  hostedUrl: "https://vibevibes.app",
-};
-
-fs.writeFileSync(
-  path.join(targetDir, "vibevibes.json"),
-  JSON.stringify(vibevibesConfig, null, 2) + "\n"
-);
-
 // Install dependencies
 console.log("  Installing dependencies...\n");
 try {
@@ -167,11 +179,13 @@ try {
 
 // Done
 console.log(`
-  Done! Your experience is ready.
+  Done! Your experience is ready. (template: ${template})
 
   cd ${name}
   npm run dev        Start local dev server (you + AI agents)
-  npm run dev:share  Share with others via Cloudflare Tunnel
+  npm run dev:share  Share with friends via public URL (no signup!)
+  npm test           Run inline tool handler tests
 
-  Edit src/index.tsx to build your experience.
+  Edit files in src/ to build your experience.
+  Entry point: src/index.tsx
 `);

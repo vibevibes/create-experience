@@ -1,6 +1,6 @@
 {
   "name": "@vibevibes/create-experience",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scaffold a new vibevibes experience — multiplayer AI-powered apps",
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
     "dev": "tsx scripts/dev.ts",
     "dev:share": "tsx scripts/dev.ts --share",
     "build": "tsx runtime/bundler.ts",
-    "publish:experience": "tsx scripts/publish.ts"
+    "test": "tsx scripts/test.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -20,6 +20,7 @@
     "src",
     "runtime",
     "scripts",
+    "templates",
     "tsconfig.json",
     "CLAUDE.md"
   ],

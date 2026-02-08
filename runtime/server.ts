@@ -13,8 +13,19 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { ZodError } from "zod";
 import { buildExperience, bundleForServer } from "./bundler.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
+
+// ── Error formatting ──────────────────────────────────────────
+
+function formatZodError(err: ZodError, toolName: string): string {
+  const issues = err.issues.map((issue) => {
+    const path = issue.path.length > 0 ? `'${issue.path.join(".")}'` : "input";
+    return `  ${path}: ${issue.message}`;
+  });
+  return `Invalid input for '${toolName}':\n${issues.join("\n")}`;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -77,6 +88,21 @@ let clientBundle: string = "";
 let serverCode: string = "";
 
 // ── Helpers ────────────────────────────────────────────────
+
+function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const sv = source[key];
+    const tv = target[key];
+    if (sv !== null && typeof sv === "object" && !Array.isArray(sv) &&
+        tv !== null && typeof tv === "object" && !Array.isArray(tv)) {
+      result[key] = deepMerge(tv, sv);
+    } else {
+      result[key] = sv;
+    }
+  }
+  return result;
+}
 
 function assignActorId(username: string, type: "human" | "ai"): string {
   const prefix = `${username}-${type}`;
@@ -286,7 +312,7 @@ async function handleTool(req: express.Request, res: express.Response) {
       memory: agentMemory.get(memoryKey) || {},
       setMemory: (updates: Record<string, any>) => {
         const current = agentMemory.get(memoryKey) || {};
-        agentMemory.set(memoryKey, { ...current, ...updates });
+        agentMemory.set(memoryKey, deepMerge(current, updates));
       },
     };
 
@@ -322,7 +348,9 @@ async function handleTool(req: express.Request, res: express.Response) {
 
     res.json({ output });
   } catch (err: any) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorMsg = err instanceof ZodError
+      ? formatZodError(err, toolName)
+      : (err instanceof Error ? err.message : String(err));
     const event: ToolEvent = {
       id: `${Date.now()}-${actorId}-${Math.random().toString(36).slice(2, 6)}`,
       ts: Date.now(),
@@ -393,7 +421,7 @@ app.post("/memory", (req, res) => {
   const { key, updates } = req.body;
   if (!key) { res.status(400).json({ error: "key required" }); return; }
   const current = agentMemory.get(key) || {};
-  agentMemory.set(key, { ...current, ...updates });
+  agentMemory.set(key, deepMerge(current, updates));
   res.json({ saved: true });
 });
 
@@ -618,22 +646,46 @@ export async function startServer() {
     });
   });
 
-  // Watch src/index.tsx for changes
-  const srcPath = path.join(PROJECT_ROOT, "src", "index.tsx");
+  // Watch entire src/ directory for changes (supports multi-file experiences)
+  const srcDir = path.join(PROJECT_ROOT, "src");
   let debounceTimer: NodeJS.Timeout | null = null;
-  fs.watch(srcPath, () => {
+
+  function onSrcChange(filename?: string) {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
-      console.log("\nFile changed, rebuilding...");
+      console.log(`\nFile changed${filename ? ` (${filename})` : ""}, rebuilding...`);
       try {
         await loadExperience();
         broadcastToAll({ type: "experience_updated" });
         console.log("Hot reload complete.");
       } catch (err: any) {
         console.error("Hot reload failed:", err.message);
+        broadcastToAll({ type: "build_error", error: err.message });
       }
     }, 300);
-  });
+  }
+
+  try {
+    // recursive: true works on Windows and macOS
+    fs.watch(srcDir, { recursive: true }, (_event, filename) => {
+      if (filename && /\.(tsx?|jsx?|css|json)$/.test(filename)) {
+        onSrcChange(filename);
+      }
+    });
+  } catch {
+    // Fallback for Linux: watch individual directories
+    function watchDir(dir: string) {
+      fs.watch(dir, (_event, filename) => {
+        if (filename && /\.(tsx?|jsx?|css|json)$/.test(filename)) {
+          onSrcChange(filename);
+        }
+      });
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) watchDir(path.join(dir, entry.name));
+      }
+    }
+    watchDir(srcDir);
+  }
 
   server.listen(PORT, () => {
     console.log(`\n  vibe-vibe local runtime`);
@@ -641,12 +693,17 @@ export async function startServer() {
     console.log(`  Viewer:  http://localhost:${PORT}`);
     if (publicUrl) {
       const shareUrl = getAuthenticatedUrl();
-      console.log(`  Share:   ${publicUrl}`);
-      console.log(`\n  Others can join your room:`);
-      console.log(`    Browser → ${shareUrl}`);
-      console.log(`    MCP     → npx @vibevibes/mcp ${shareUrl}`);
+      console.log(``);
+      console.log(`  ┌─────────────────────────────────────────────────┐`);
+      console.log(`  │  SHARE WITH FRIENDS:                            │`);
+      console.log(`  │                                                 │`);
+      console.log(`  │  ${shareUrl.padEnd(47)} │`);
+      console.log(`  │                                                 │`);
+      console.log(`  │  Open in browser to join the room.              │`);
+      console.log(`  │  AI: npx @vibevibes/mcp ${(shareUrl).padEnd(23)} │`);
+      console.log(`  └─────────────────────────────────────────────────┘`);
     }
-    console.log(`\n  Watching src/index.tsx for changes\n`);
+    console.log(`\n  Watching src/ for changes\n`);
   });
 
   return server;

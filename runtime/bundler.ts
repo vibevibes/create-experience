@@ -43,20 +43,45 @@ function stripExternalImports(code: string): string {
 }
 
 /**
- * Inject CJS shim variables so that esbuild's generated references (e.g. import_zod.z)
- * resolve correctly when externals are provided as function arguments.
- *
- * esbuild uses the last path segment for variable names:
- *   "react" → import_react, "zod" → import_zod, "@vibevibes/sdk" → import_sdk
+ * Base CJS shim definitions for esbuild-generated variable references.
+ * esbuild uses the last path segment: "react" → import_react, "zod" → import_zod, etc.
  */
-function injectCjsShims(): string {
-  return [
-    "var import_react = { default: React, __esModule: true };",
-    "var import_zod = { z: z, default: z };",
-    "var import_yjs = { default: Y };",
-    "var import_sdk = { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest } };",
-    "var import_vibevibes_sdk = import_sdk;",
-  ].join("\n");
+const CJS_BASE_SHIMS: Record<string, string> = {
+  import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
+  import_zod: "{ z: z, default: z }",
+  import_yjs: "{ default: Y }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool } }",
+};
+
+/**
+ * Inject CJS shim variables so that esbuild's generated references resolve correctly.
+ * When multiple files import the same external, esbuild creates numbered variants
+ * (import_react2, import_react3, etc). We detect those and alias them to the base shim.
+ */
+function injectCjsShims(code: string): string {
+  const lines: string[] = [];
+
+  // Emit base shims
+  for (const [name, value] of Object.entries(CJS_BASE_SHIMS)) {
+    lines.push(`var ${name} = ${value};`);
+  }
+
+  // Scan for numbered variants (e.g. import_react2, import_zod3) and alias them
+  for (const baseName of Object.keys(CJS_BASE_SHIMS)) {
+    const pattern = new RegExp(`\\b(${baseName}(\\d+))\\b`, "g");
+    const seen = new Set<string>();
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      const numberedName = match[1];
+      if (!seen.has(numberedName)) {
+        seen.add(numberedName);
+        lines.push(`var ${numberedName} = ${baseName};`);
+      }
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -82,7 +107,8 @@ export async function bundleForServer(entryPath: string) {
   code = stripExternalImports(code);
 
   // Inject CJS shims for esbuild-generated variable references
-  code = injectCjsShims() + "\n" + code;
+  // Pass code so we can detect numbered variants (import_react2, etc.)
+  code = injectCjsShims(code) + "\n" + code;
 
   // Replace module.exports/export default with variable assignment
   code = code.replace(
@@ -101,15 +127,21 @@ export async function bundleForServer(entryPath: string) {
  * Evaluate a server bundle and extract the ExperienceModule.
  */
 export async function evalServerBundle(serverCode: string): Promise<any> {
-  const { defineExperience, defineTool, defineTest } = await import("@vibevibes/sdk");
+  const { defineExperience, defineTool, defineTest, undoTool } = await import("@vibevibes/sdk");
   // Stub React for server-side (tools don't render)
-  const stubReact = { createElement: () => null, Fragment: "Fragment" };
+  const noop = () => null;
+  const stubReact = {
+    createElement: noop, Fragment: "Fragment",
+    useState: noop, useEffect: noop, useCallback: noop,
+    useMemo: noop, useRef: noop, useContext: noop, useReducer: noop,
+    createContext: noop, forwardRef: noop, memo: (x: any) => x,
+  };
   const zodModule = await import("zod");
   const z = zodModule.z ?? zodModule.default ?? zodModule;
 
   const fn = new Function(
     "React", "Y", "z",
-    "defineExperience", "defineTool", "defineTest",
+    "defineExperience", "defineTool", "defineTest", "undoTool",
     "require", "exports", "module", "console",
     `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : (typeof module !== 'undefined' ? module.exports : undefined);`
   );
@@ -117,7 +149,7 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const fakeModule = { exports: {} };
   const result = fn(
     stubReact, {}, z,
-    defineExperience, defineTool, defineTest,
+    defineExperience, defineTool, defineTest, undoTool,
     () => ({}), fakeModule.exports, fakeModule, console,
   );
 
@@ -147,7 +179,7 @@ export async function bundleForClient(entryPath: string): Promise<string> {
   code = stripExternalImports(code);
 
   // Inject globalThis accessors at the top
-  const globals = `
+  const baseGlobals = `
 const React = globalThis.React;
 const Y = globalThis.Y || {};
 const z = globalThis.z;
@@ -155,11 +187,38 @@ const defineExperience = globalThis.defineExperience || ((m) => m);
 const defineTool = globalThis.defineTool || ((c) => ({ risk: "low", capabilities_required: [], ...c }));
 const defineTest = globalThis.defineTest || ((c) => c);
 const quickTool = globalThis.quickTool;
-const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator } = globalThis.vibevibesHooks || {};
-const { Button, Card, Input, Badge, Stack, Grid } = globalThis.vibevibesComponents || {};
+const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle } = globalThis.vibevibesHooks || {};
+const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs } = globalThis.vibevibesComponents || {};
+const undoTool = globalThis.undoTool || (() => ({}));
 `;
 
-  return globals + "\n" + code;
+  // When multiple files import the same external, esbuild ESM creates numbered
+  // variable references (React2, z2, etc). Alias them back to the base global.
+  const esmAliases: Record<string, string> = {
+    React: "React",
+    Y: "Y",
+    z: "z",
+    defineExperience: "defineExperience",
+    defineTool: "defineTool",
+    defineTest: "defineTest",
+  };
+
+  const aliasLines: string[] = [];
+  for (const [baseName, target] of Object.entries(esmAliases)) {
+    // Match e.g. React2, React3, z2 — but not React.createElement or ReactDOM
+    const pattern = new RegExp(`\\b(${baseName}(\\d+))\\b`, "g");
+    const seen = new Set<string>();
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      const numbered = match[1];
+      if (!seen.has(numbered)) {
+        seen.add(numbered);
+        aliasLines.push(`const ${numbered} = ${target};`);
+      }
+    }
+  }
+
+  return baseGlobals + aliasLines.join("\n") + "\n" + code;
 }
 
 /**
