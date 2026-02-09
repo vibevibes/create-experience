@@ -12,7 +12,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 
-const EXTERNALS = ["react", "react-dom", "yjs", "zod", "@vibevibes/sdk"];
+const EXTERNALS = ["react", "react/jsx-runtime", "react-dom", "yjs", "zod", "@vibevibes/sdk"];
 
 /**
  * Strip import/export statements for external packages.
@@ -50,8 +50,8 @@ const CJS_BASE_SHIMS: Record<string, string> = {
   import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
   import_zod: "{ z: z, default: z }",
   import_yjs: "{ default: Y }",
-  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool } }",
-  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool } }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig } }",
 };
 
 /**
@@ -127,7 +127,7 @@ export async function bundleForServer(entryPath: string) {
  * Evaluate a server bundle and extract the ExperienceModule.
  */
 export async function evalServerBundle(serverCode: string): Promise<any> {
-  const { defineExperience, defineTool, defineTest, undoTool } = await import("@vibevibes/sdk");
+  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = await import("@vibevibes/sdk");
   // Stub React for server-side (tools don't render)
   const noop = () => null;
   const stubReact = {
@@ -142,6 +142,7 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const fn = new Function(
     "React", "Y", "z",
     "defineExperience", "defineTool", "defineTest", "undoTool",
+    "defineRoomConfig",
     "require", "exports", "module", "console",
     `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : (typeof module !== 'undefined' ? module.exports : undefined);`
   );
@@ -150,6 +151,7 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const result = fn(
     stubReact, {}, z,
     defineExperience, defineTool, defineTest, undoTool,
+    defineRoomConfig,
     () => ({}), fakeModule.exports, fakeModule, console,
   );
 
@@ -181,11 +183,17 @@ export async function bundleForClient(entryPath: string): Promise<string> {
   // Inject globalThis accessors at the top
   const baseGlobals = `
 const React = globalThis.React;
+const { useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer, createContext, forwardRef, memo, Fragment, createElement } = React;
+// JSX Runtime (used when esbuild generates jsx-runtime imports)
+const jsx = createElement;
+const jsxs = createElement;
+const jsxDEV = createElement;
 const Y = globalThis.Y || {};
 const z = globalThis.z;
 const defineExperience = globalThis.defineExperience || ((m) => m);
 const defineTool = globalThis.defineTool || ((c) => ({ risk: "low", capabilities_required: [], ...c }));
 const defineTest = globalThis.defineTest || ((c) => c);
+const defineRoomConfig = globalThis.defineRoomConfig || ((c) => c);
 const quickTool = globalThis.quickTool;
 const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle } = globalThis.vibevibesHooks || {};
 const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs } = globalThis.vibevibesComponents || {};
@@ -196,6 +204,13 @@ const undoTool = globalThis.undoTool || (() => ({}));
   // variable references (React2, z2, etc). Alias them back to the base global.
   const esmAliases: Record<string, string> = {
     React: "React",
+    useState: "useState",
+    useEffect: "useEffect",
+    useCallback: "useCallback",
+    useMemo: "useMemo",
+    useRef: "useRef",
+    useContext: "useContext",
+    useReducer: "useReducer",
     Y: "Y",
     z: "z",
     defineExperience: "defineExperience",

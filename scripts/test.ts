@@ -72,7 +72,7 @@ function createTestHelpers(tools: any[]) {
       if (!t) throw new Error(`Tool '${name}' not found. Available: ${tools.map((t: any) => t.name).join(", ")}`);
       return t;
     },
-    ctx(opts: { state?: Record<string, any>; actorId?: string; roomId?: string; owner?: string } = {}) {
+    ctx(opts: { state?: Record<string, any>; actorId?: string; roomId?: string; owner?: string; roomConfig?: Record<string, any> } = {}) {
       const mock: any = {
         roomId: opts.roomId || "test-room",
         actorId: opts.actorId || "test-human-1",
@@ -82,6 +82,7 @@ function createTestHelpers(tools: any[]) {
         timestamp: Date.now(),
         memory: {} as Record<string, any>,
         setMemory(_updates: Record<string, any>) {},
+        roomConfig: opts.roomConfig || {},
         getState() { return mock.state; },
       };
       return mock;

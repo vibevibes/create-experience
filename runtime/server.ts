@@ -1,9 +1,10 @@
 /**
  * Local vibe-vibe runtime server.
- * Multi-room architecture with tool gate, WebSocket broadcasts, and room spawning.
+ * Multi-room, multi-experience architecture with tool gate, WebSocket broadcasts, and room spawning.
  *
- * The default "local" room is created on startup. Opening localhost:4321 puts you in it.
- * Additional rooms can be spawned via POST /rooms/spawn or from tool handlers with spawnRoom().
+ * The default "local" room is created on startup running the host experience (src/index.tsx).
+ * Additional rooms can be spawned via POST /rooms/spawn — including rooms running different experiences.
+ * Cross-experience room spawning uses a per-project vibevibes.registry.json to resolve experience IDs to source paths.
  * AI agents join rooms via MCP or HTTP.
  */
 
@@ -15,7 +16,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { ZodError } from "zod";
 import { EventEmitter } from "events";
-import { buildExperience, bundleForServer } from "./bundler.js";
+import { buildExperience, bundleForServer, bundleForClient, evalServerBundle } from "./bundler.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 // ── Error formatting ──────────────────────────────────────────
@@ -52,6 +53,15 @@ interface RoomLink {
   createdAt: string;
 }
 
+/** A loaded and cached experience (host or external). */
+interface LoadedExperience {
+  module: any;           // The evaluated ExperienceModule (manifest, tools, Canvas, etc.)
+  clientBundle: string;  // ESM bundle for the browser
+  serverCode: string;    // CJS bundle (kept for hot-reload re-eval)
+  loadedAt: number;
+  sourcePath: string;    // Absolute path to the entry file
+}
+
 // ── Room class ─────────────────────────────────────────────
 
 class Room {
@@ -63,10 +73,13 @@ class Room {
   wsConnections = new Map<WebSocket, string>(); // ws → actorId
   parentRoomId?: string;
   childRoomIds: string[] = [];
+  /** Immutable config set at spawn time. Defines this room's modality/parameters. */
+  readonly config: Record<string, any>;
 
-  constructor(id: string, experienceId: string, initialState?: Record<string, any>) {
+  constructor(id: string, experienceId: string, initialState?: Record<string, any>, config?: Record<string, any>) {
     this.id = id;
     this.experienceId = experienceId;
+    this.config = Object.freeze(config || {});
     if (initialState) {
       this.sharedState = initialState;
     }
@@ -108,9 +121,9 @@ const agentMemory = new Map<string, Record<string, any>>();
 const roomEvents = new EventEmitter();
 roomEvents.setMaxListeners(200);
 
-let experience: any = null;
-let clientBundle: string = "";
-let serverCode: string = "";
+// ── Experience cache (replaces single global `experience`) ──
+const experienceCache = new Map<string, LoadedExperience>();
+let hostExperienceId: string = "";
 
 // Spawn rate limiting: max 5 spawns per source room per 5 minutes
 const spawnCounts = new Map<string, { count: number; windowStart: number }>();
@@ -184,6 +197,16 @@ function getDefaultRoom(): Room {
   return rooms.get(DEFAULT_ROOM_ID)!;
 }
 
+/** Get the loaded experience for a room. Returns undefined if not loaded. */
+function getExperienceForRoom(room: Room): LoadedExperience | undefined {
+  return experienceCache.get(room.experienceId);
+}
+
+/** Get the host experience module (convenience). */
+function getHostExperience(): any {
+  return experienceCache.get(hostExperienceId)?.module;
+}
+
 function generateRoomId(): string {
   return `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -202,10 +225,206 @@ function checkSpawnRate(sourceRoomId: string): boolean {
   return true;
 }
 
-function spawnRoom(
+/**
+ * Resolve room config against a specific experience's roomConfig definition.
+ * Handles: preset names, explicit config objects, defaults, and validation.
+ */
+function resolveRoomConfig(
+  experienceModule: any,
+  configInput: Record<string, any> | string | undefined,
+): Record<string, any> {
+  const roomConfigDef = experienceModule?.roomConfig;
+  if (!roomConfigDef) {
+    // No config schema defined — pass through whatever was given (or empty)
+    return typeof configInput === "object" ? configInput || {} : {};
+  }
+
+  let resolved: Record<string, any>;
+
+  if (typeof configInput === "string") {
+    // Preset name
+    const preset = roomConfigDef.presets?.[configInput];
+    if (!preset) {
+      const available = Object.keys(roomConfigDef.presets || {}).join(", ");
+      throw new Error(`Unknown config preset '${configInput}'. Available: ${available || "(none)"}`);
+    }
+    resolved = { ...roomConfigDef.defaults, ...preset };
+  } else if (configInput && Object.keys(configInput).length > 0) {
+    // Explicit config values merged over defaults
+    resolved = { ...roomConfigDef.defaults, ...configInput };
+  } else {
+    // No config provided — use defaults
+    resolved = { ...roomConfigDef.defaults } || {};
+  }
+
+  // Validate against schema if available
+  if (roomConfigDef.schema?.parse) {
+    try {
+      resolved = roomConfigDef.schema.parse(resolved);
+    } catch (err: any) {
+      if (err instanceof ZodError) {
+        const issues = err.issues.map((i: any) => `  ${i.path.join(".")}: ${i.message}`).join("\n");
+        throw new Error(`Invalid room config:\n${issues}`);
+      }
+      throw err;
+    }
+  }
+
+  return resolved;
+}
+
+// ── Registry: discover external experiences ────────────────
+
+/**
+ * Read vibevibes.registry.json from the project root.
+ * Returns a map of experienceId → absolute entry path.
+ * Called on-demand (not cached — file can change between calls).
+ */
+function loadRegistry(): Map<string, string> {
+  const registryPath = path.join(PROJECT_ROOT, "vibevibes.registry.json");
+  if (!fs.existsSync(registryPath)) return new Map();
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+    const entries = new Map<string, string>();
+
+    for (const [id, entry] of Object.entries(raw.experiences || {})) {
+      const e = entry as any;
+      if (e.path) {
+        const resolved = path.resolve(path.dirname(registryPath), e.path);
+        if (fs.existsSync(resolved)) {
+          entries.set(id, resolved);
+        } else {
+          console.warn(`  Registry: '${id}' path not found: ${resolved}`);
+        }
+      }
+    }
+    return entries;
+  } catch (err: any) {
+    console.warn(`  Registry: failed to parse vibevibes.registry.json: ${err.message}`);
+    return new Map();
+  }
+}
+
+// ── Experience loading ─────────────────────────────────────
+
+/**
+ * Load an experience from an arbitrary entry path.
+ * Bundles server + client, evals server bundle, caches the result.
+ */
+async function loadExperienceFromPath(entryPath: string): Promise<LoadedExperience> {
+  const [sCode, cCode] = await Promise.all([
+    bundleForServer(entryPath),
+    bundleForClient(entryPath),
+  ]);
+
+  const mod = await evalServerBundle(sCode);
+
+  if (!mod?.manifest || !mod?.tools) {
+    throw new Error(`Experience at ${entryPath} missing manifest or tools`);
+  }
+
+  const loaded: LoadedExperience = {
+    module: mod,
+    clientBundle: cCode,
+    serverCode: sCode,
+    loadedAt: Date.now(),
+    sourcePath: entryPath,
+  };
+
+  experienceCache.set(mod.manifest.id, loaded);
+  return loaded;
+}
+
+/**
+ * Load an experience by ID. Checks cache first, then registry.
+ * Throws if the experience can't be found or loaded.
+ */
+async function loadExperienceById(experienceId: string): Promise<LoadedExperience> {
+  // Cache hit
+  const cached = experienceCache.get(experienceId);
+  if (cached) return cached;
+
+  // Look up in registry
+  const registry = loadRegistry();
+  const entryPath = registry.get(experienceId);
+  if (!entryPath) {
+    const available = [hostExperienceId, ...registry.keys()].filter(Boolean);
+    throw new Error(
+      `Experience '${experienceId}' not found. Available: ${available.join(", ") || "(none)"}. ` +
+      `Add it to vibevibes.registry.json.`
+    );
+  }
+
+  console.log(`  Loading external experience '${experienceId}' from ${entryPath}...`);
+  const loaded = await loadExperienceFromPath(entryPath);
+
+  // Warn if manifest ID doesn't match registry key
+  if (loaded.module.manifest.id !== experienceId) {
+    console.warn(`  Warning: registry key '${experienceId}' but manifest.id is '${loaded.module.manifest.id}'`);
+  }
+
+  console.log(`  Loaded: ${loaded.module.manifest.title} (${loaded.module.tools.length} tools)`);
+  return loaded;
+}
+
+/**
+ * Load the host experience from src/index.tsx (startup + hot reload).
+ */
+async function loadHostExperience(): Promise<LoadedExperience> {
+  const result = await buildExperience();
+
+  // Eval to extract tools + manifest
+  const sdk = await import("@vibevibes/sdk");
+  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = sdk;
+  const stubReact = { createElement: () => null, Fragment: "Fragment" };
+  const zodModule = await import("zod");
+  const z = zodModule.z ?? zodModule.default ?? zodModule;
+
+  const fn = new Function(
+    "React", "Y", "z",
+    "defineExperience", "defineTool", "defineTest", "undoTool",
+    "defineRoomConfig",
+    "require", "exports", "module", "console",
+    `"use strict";\n${result.serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : undefined;`
+  );
+
+  const fakeModule = { exports: {} as any };
+  const result2 = fn(
+    stubReact, {}, z,
+    defineExperience, defineTool, defineTest, undoTool,
+    defineRoomConfig,
+    () => ({}), fakeModule.exports, fakeModule, console,
+  );
+
+  const mod = result2?.default ?? result2 ?? fakeModule.exports?.default ?? fakeModule.exports;
+
+  if (!mod?.manifest || !mod?.tools) {
+    throw new Error("Experience module missing manifest or tools");
+  }
+
+  const entryPath = path.join(PROJECT_ROOT, "src", "index.tsx");
+  const loaded: LoadedExperience = {
+    module: mod,
+    clientBundle: result.clientCode,
+    serverCode: result.serverCode,
+    loadedAt: Date.now(),
+    sourcePath: entryPath,
+  };
+
+  hostExperienceId = mod.manifest.id;
+  experienceCache.set(hostExperienceId, loaded);
+
+  console.log(`Loaded: ${mod.manifest.title} (${mod.tools.length} tools)`);
+  return loaded;
+}
+
+// ── Spawn room (async — can load external experiences) ─────
+
+async function spawnRoom(
   sourceRoomId: string,
-  opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean },
-): { roomId: string; url: string } {
+  opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean; config?: Record<string, any> | string },
+): Promise<{ roomId: string; url: string; config: Record<string, any> }> {
   if (!checkSpawnRate(sourceRoomId)) {
     throw new Error(`Rate limited: max ${MAX_SPAWNS_PER_WINDOW} spawns per ${SPAWN_WINDOW_MS / 60000} minutes`);
   }
@@ -215,11 +434,17 @@ function spawnRoom(
     throw new Error(`Room '${roomId}' already exists`);
   }
 
+  // Load the target experience (may be external — loads on demand)
+  const targetExperience = await loadExperienceById(opts.experienceId);
+
+  // Resolve and validate config against the TARGET experience's schema
+  const config = resolveRoomConfig(targetExperience.module, opts.config);
+
   const initialState = opts.linkBack
-    ? { ...opts.initialState, _parentRoom: sourceRoomId }
+    ? { ...(opts.initialState || {}), _parentRoom: sourceRoomId }
     : (opts.initialState || {});
 
-  const room = new Room(roomId, opts.experienceId, initialState);
+  const room = new Room(roomId, opts.experienceId, initialState, config);
   room.parentRoomId = sourceRoomId;
   rooms.set(roomId, room);
 
@@ -229,59 +454,17 @@ function spawnRoom(
     sourceRoom.childRoomIds.push(roomId);
   }
 
-  // Store RoomLink
+  // Store RoomLink (include config in metadata)
   roomLinks.push({
     parentRoomId: sourceRoomId,
     childRoomId: roomId,
     linkType: "spawned",
-    metadata: { experienceId: opts.experienceId },
+    metadata: { experienceId: opts.experienceId, config },
     createdAt: new Date().toISOString(),
   });
 
   const url = `${getBaseUrl()}?room=${roomId}`;
-  return { roomId, url };
-}
-
-// ── Load experience ────────────────────────────────────────
-
-async function loadExperience() {
-  try {
-    const result = await buildExperience();
-    clientBundle = result.clientCode;
-    serverCode = result.serverCode;
-
-    // Eval to extract tools + manifest
-    const { defineExperience, defineTool, defineTest, undoTool } = await import("@vibevibes/sdk");
-    const stubReact = { createElement: () => null, Fragment: "Fragment" };
-    const zodModule = await import("zod");
-    const z = zodModule.z ?? zodModule.default ?? zodModule;
-
-    const fn = new Function(
-      "React", "Y", "z",
-      "defineExperience", "defineTool", "defineTest", "undoTool",
-      "require", "exports", "module", "console",
-      `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : undefined;`
-    );
-
-    const fakeModule = { exports: {} as any };
-    const result2 = fn(
-      stubReact, {}, z,
-      defineExperience, defineTool, defineTest, undoTool,
-      () => ({}), fakeModule.exports, fakeModule, console,
-    );
-
-    experience = result2?.default ?? result2 ?? fakeModule.exports?.default ?? fakeModule.exports;
-
-    if (!experience?.manifest || !experience?.tools) {
-      throw new Error("Experience module missing manifest or tools");
-    }
-
-    console.log(`Loaded: ${experience.manifest.title} (${experience.tools.length} tools)`);
-    return experience;
-  } catch (err: any) {
-    console.error("Failed to load experience:", err.message);
-    throw err;
-  }
+  return { roomId, url, config };
 }
 
 // ── Express app ────────────────────────────────────────────
@@ -329,20 +512,23 @@ app.use("/viewer", express.static(path.join(__dirname, "viewer")));
 
 app.get("/state", (_req, res) => {
   const room = getDefaultRoom();
+  const exp = getExperienceForRoom(room);
   res.json({
     roomId: room.id,
-    experienceId: experience?.manifest?.id ?? "unknown",
+    experienceId: exp?.module?.manifest?.id ?? room.experienceId,
     sharedState: room.sharedState,
     participants: room.participantList(),
     events: room.events.slice(-50),
+    config: room.config,
   });
 });
 
 // ── Join (flat = default room) ─────────────────────────────
 
 function handleJoin(room: Room, req: express.Request, res: express.Response) {
-  if (!experience) {
-    res.status(500).json({ error: "Experience not loaded" });
+  const exp = getExperienceForRoom(room);
+  if (!exp) {
+    res.status(500).json({ error: `Experience '${room.experienceId}' not loaded` });
     return;
   }
 
@@ -359,12 +545,14 @@ function handleJoin(room: Room, req: express.Request, res: express.Response) {
   res.json({
     roomId: room.id,
     actorId,
-    experienceId: experience.manifest.id,
+    experienceId: exp.module.manifest.id,
     sharedState: room.sharedState,
     participants: room.participantList(),
     events: room.events.slice(-20),
-    tools: getToolList(experience),
+    tools: getToolList(exp.module),
     browserUrl: getBaseUrl(),
+    config: room.config,
+    hasRoomConfig: !!exp.module.roomConfig,
   });
 }
 
@@ -400,7 +588,8 @@ setInterval(() => {
 // ── Execute tool ────────────────────────────────────────────
 
 async function handleTool(room: Room, req: express.Request, res: express.Response) {
-  if (!experience) { res.status(500).json({ error: "Experience not loaded" }); return; }
+  const exp = getExperienceForRoom(room);
+  if (!exp) { res.status(500).json({ error: `Experience '${room.experienceId}' not loaded` }); return; }
 
   // Idempotency: return cached result if same key seen recently
   const idempotencyKey = req.headers["x-idempotency-key"] as string | undefined;
@@ -415,8 +604,8 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
   const toolName = req.params.toolName;
   const { actorId, input = {}, owner } = req.body;
 
-  // Find tool
-  const tool = experience.tools.find((t: any) => t.name === toolName);
+  // Find tool from the room's experience
+  const tool = exp.module.tools.find((t: any) => t.name === toolName);
   if (!tool) {
     res.status(404).json({ error: `Tool '${toolName}' not found` });
     return;
@@ -430,7 +619,7 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
     }
 
     // Build ToolCtx
-    const memoryKey = `${experience.manifest.id}:${actorId}`;
+    const memoryKey = `${exp.module.manifest.id}:${actorId}`;
     const ctx: Record<string, any> = {
       roomId: room.id,
       actorId,
@@ -445,12 +634,13 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
         const current = agentMemory.get(memoryKey) || {};
         agentMemory.set(memoryKey, deepMerge(current, updates));
       },
+      roomConfig: room.config,
     };
 
     // Wire spawnRoom if experience requests the capability
-    const capabilities = experience.manifest.requested_capabilities || [];
+    const capabilities = exp.module.manifest.requested_capabilities || [];
     if (capabilities.includes("room.spawn")) {
-      ctx.spawnRoom = async (opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean }) => {
+      ctx.spawnRoom = async (opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean; config?: Record<string, any> | string }) => {
         return spawnRoom(room.id, opts);
       };
     }
@@ -569,11 +759,12 @@ app.get("/events", (req, res) => handleEvents(getDefaultRoom(), req, res));
 // ── Serve client bundle ────────────────────────────────────
 
 app.get("/bundle", (_req, res) => {
+  const host = experienceCache.get(hostExperienceId);
   res.setHeader("Content-Type", "text/javascript");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
-  res.send(clientBundle);
+  res.send(host?.clientBundle || "");
 });
 
 // ── Memory endpoints ───────────────────────────────────────
@@ -648,12 +839,15 @@ app.get("/screenshot", (req, res) => {
 
 app.post("/sync", async (_req, res) => {
   try {
-    await loadExperience();
-    // Broadcast to all rooms
+    await loadHostExperience();
+    // Broadcast only to rooms running the host experience
     for (const room of rooms.values()) {
-      room.broadcastToAll({ type: "experience_updated" });
+      if (room.experienceId === hostExperienceId) {
+        room.broadcastToAll({ type: "experience_updated" });
+      }
     }
-    res.json({ synced: true, title: experience?.manifest?.title });
+    const host = getHostExperience();
+    res.json({ synced: true, title: host?.manifest?.title });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -669,19 +863,111 @@ app.get("/rooms", (_req, res) => {
     eventCount: room.events.length,
     parentRoomId: room.parentRoomId,
     childRoomIds: room.childRoomIds,
+    config: room.config,
   }));
   res.json(roomList);
 });
 
-app.post("/rooms/spawn", (req, res) => {
+app.post("/rooms/spawn", async (req, res) => {
   try {
-    const { experienceId, name, initialState, linkBack, sourceRoomId } = req.body;
+    const { experienceId, name, initialState, linkBack, sourceRoomId, config } = req.body;
     const source = sourceRoomId || DEFAULT_ROOM_ID;
-    const result = spawnRoom(source, { experienceId: experienceId || experience?.manifest?.id, name, initialState, linkBack });
+    const result = await spawnRoom(source, {
+      experienceId: experienceId || hostExperienceId,
+      name,
+      initialState,
+      linkBack,
+      config,
+    });
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// ── Room config schema endpoint ────────────────────────────
+app.get("/rooms/config-schema", async (req, res) => {
+  try {
+    const targetId = (req.query.experienceId as string) || hostExperienceId;
+    const loaded = await loadExperienceById(targetId);
+    const roomConfigDef = loaded.module?.roomConfig;
+
+    if (!roomConfigDef) {
+      res.json({ hasConfig: false, experienceId: targetId });
+      return;
+    }
+    const schema = roomConfigDef.schema
+      ? zodToJsonSchema(roomConfigDef.schema)
+      : {};
+    res.json({
+      hasConfig: true,
+      experienceId: targetId,
+      schema,
+      defaults: roomConfigDef.defaults || {},
+      presets: Object.keys(roomConfigDef.presets || {}),
+      description: roomConfigDef.description || "",
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── Experiences endpoint (discovery for agents) ────────────
+
+app.get("/experiences", (_req, res) => {
+  const registry = loadRegistry();
+  const available: Array<{
+    id: string;
+    title: string;
+    description: string;
+    version: string;
+    source: "host" | "registry";
+    loaded: boolean;
+    hasRoomConfig: boolean;
+  }> = [];
+
+  // Host experience (always first, always loaded)
+  const host = experienceCache.get(hostExperienceId);
+  if (host) {
+    available.push({
+      id: host.module.manifest.id,
+      title: host.module.manifest.title,
+      description: host.module.manifest.description,
+      version: host.module.manifest.version,
+      source: "host",
+      loaded: true,
+      hasRoomConfig: !!host.module.roomConfig,
+    });
+  }
+
+  // Registry entries
+  for (const [id] of registry) {
+    if (id === hostExperienceId) continue; // Already listed as host
+    const cached = experienceCache.get(id);
+    if (cached) {
+      available.push({
+        id: cached.module.manifest.id,
+        title: cached.module.manifest.title,
+        description: cached.module.manifest.description,
+        version: cached.module.manifest.version,
+        source: "registry",
+        loaded: true,
+        hasRoomConfig: !!cached.module.roomConfig,
+      });
+    } else {
+      available.push({
+        id,
+        title: id,
+        description: "(not yet loaded — spawn a room to load)",
+        version: "unknown",
+        source: "registry",
+        loaded: false,
+        hasRoomConfig: false,
+      });
+    }
+  }
+
+  res.json(available);
 });
 
 app.get("/rooms/:roomId", (req, res) => {
@@ -698,6 +984,7 @@ app.get("/rooms/:roomId", (req, res) => {
     events: room.events.slice(-50),
     parentRoomId: room.parentRoomId,
     childRoomIds: room.childRoomIds,
+    config: room.config,
   });
 });
 
@@ -745,12 +1032,23 @@ app.get("/rooms/:roomId/events", (req, res) => {
   handleEvents(room, req, res);
 });
 
-app.get("/rooms/:roomId/bundle", (_req, res) => {
+// ── Room-specific bundle (serves the correct experience's client bundle) ──
+app.get("/rooms/:roomId/bundle", (req, res) => {
+  const room = getRoom(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: `Room '${req.params.roomId}' not found` });
+    return;
+  }
+  const loaded = getExperienceForRoom(room);
+  if (!loaded) {
+    res.status(500).json({ error: `Experience '${room.experienceId}' not loaded` });
+    return;
+  }
   res.setHeader("Content-Type", "text/javascript");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
-  res.send(clientBundle);
+  res.send(loaded.clientBundle);
 });
 
 // ── MCP config (for remote joiners) ───────────────────────
@@ -777,11 +1075,22 @@ app.get("/mcp-config", (_req, res) => {
 // ── Start server ───────────────────────────────────────────
 
 export async function startServer() {
-  await loadExperience();
+  await loadHostExperience();
 
-  // Create default room
-  const defaultRoom = new Room(DEFAULT_ROOM_ID, experience.manifest.id);
+  // Create default room (with default config)
+  const hostExp = getHostExperience();
+  const defaultConfig = resolveRoomConfig(hostExp, undefined);
+  const defaultRoom = new Room(DEFAULT_ROOM_ID, hostExperienceId, {}, defaultConfig);
   rooms.set(DEFAULT_ROOM_ID, defaultRoom);
+
+  // Log registry info
+  const registry = loadRegistry();
+  if (registry.size > 0) {
+    console.log(`  Registry: ${registry.size} external experience(s) available`);
+    for (const [id] of registry) {
+      console.log(`    - ${id}`);
+    }
+  }
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
@@ -818,6 +1127,7 @@ export async function startServer() {
             sharedState: room.sharedState,
             participants: room.participantList(),
             events: room.events.slice(-20),
+            config: room.config,
           }));
 
           // Broadcast presence update to others in this room
@@ -894,7 +1204,7 @@ export async function startServer() {
     }
   }, 30000);
 
-  // Watch src/ and templates/ directories for changes
+  // Watch src/ and templates/ directories for changes (host experience only)
   const watchDirs = [
     path.join(PROJECT_ROOT, "src"),
     path.join(PROJECT_ROOT, "templates"),
@@ -906,15 +1216,20 @@ export async function startServer() {
     debounceTimer = setTimeout(async () => {
       console.log(`\nFile changed${filename ? ` (${filename})` : ""}, rebuilding...`);
       try {
-        await loadExperience();
+        await loadHostExperience();
+        // Only broadcast to rooms running the host experience
         for (const room of rooms.values()) {
-          room.broadcastToAll({ type: "experience_updated" });
+          if (room.experienceId === hostExperienceId) {
+            room.broadcastToAll({ type: "experience_updated" });
+          }
         }
         console.log("Hot reload complete.");
       } catch (err: any) {
         console.error("Hot reload failed:", err.message);
         for (const room of rooms.values()) {
-          room.broadcastToAll({ type: "build_error", error: err.message });
+          if (room.experienceId === hostExperienceId) {
+            room.broadcastToAll({ type: "build_error", error: err.message });
+          }
         }
       }
     }, 300);

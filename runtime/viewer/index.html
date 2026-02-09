@@ -494,6 +494,9 @@
     const WS_PROTO = location.protocol === "https:" ? "wss:" : "ws:";
     const WS_URL = `${WS_PROTO}//${location.host}`;
 
+    // Room-aware: read ?room= query param (defaults to "local" for host experience)
+    const ROOM_ID = new URLSearchParams(location.search).get("room") || "local";
+
     function showError(msg) {
       document.getElementById("loading").style.display = "none";
       document.getElementById("error-display").style.display = "block";
@@ -508,6 +511,7 @@
         let actorId = "viewer";
         let sharedState = {};
         let participants = [];
+        let roomConfig = {};
         let Canvas = null;
 
         function render() {
@@ -524,13 +528,14 @@
           reactRoot.render(
             ce(CanvasErrorBoundary, null,
               ce(Canvas, {
-                roomId: "local",
+                roomId: ROOM_ID,
                 actorId,
                 sharedState,
                 callTool,
                 participants,
                 ephemeralState: {},
                 setEphemeral: () => {},
+                roomConfig,
               })
             )
           );
@@ -538,7 +543,10 @@
 
         async function callTool(name, input) {
           try {
-            const res = await fetch(`${SERVER}/tools/${name}`, {
+            const toolUrl = ROOM_ID === "local"
+              ? `${SERVER}/tools/${name}`
+              : `${SERVER}/rooms/${ROOM_ID}/tools/${name}`;
+            const res = await fetch(toolUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ actorId, input: input || {} }),
@@ -587,7 +595,7 @@
 
         ws.onopen = () => {
           reconnectAttempts = 0; // Reset backoff on successful connection
-          ws.send(JSON.stringify({ type: "join", username: "viewer" }));
+          ws.send(JSON.stringify({ type: "join", username: "viewer", roomId: ROOM_ID }));
         };
 
         ws.onmessage = async (event) => {
@@ -597,10 +605,14 @@
             actorId = msg.actorId;
             sharedState = msg.sharedState || {};
             participants = msg.participants || [];
+            roomConfig = msg.config || {};
 
-            // Load client bundle
+            // Load client bundle (room-aware: external experiences get their own bundle)
             try {
-              const bundleRes = await fetch(`${SERVER}/bundle?_t=${Date.now()}`);
+              const bundleUrl = ROOM_ID === "local"
+                ? `${SERVER}/bundle?_t=${Date.now()}`
+                : `${SERVER}/rooms/${ROOM_ID}/bundle?_t=${Date.now()}`;
+              const bundleRes = await fetch(bundleUrl);
               const bundleCode = await bundleRes.text();
 
               const blob = new Blob([bundleCode], { type: "text/javascript" });
@@ -641,7 +653,10 @@
           if (msg.type === "experience_updated") {
             // Hot reload: re-fetch bundle and re-render
             try {
-              const bundleRes = await fetch(`${SERVER}/bundle?_t=${Date.now()}`);
+              const bundleUrl = ROOM_ID === "local"
+                ? `${SERVER}/bundle?_t=${Date.now()}`
+                : `${SERVER}/rooms/${ROOM_ID}/bundle?_t=${Date.now()}`;
+              const bundleRes = await fetch(bundleUrl);
               const bundleCode = await bundleRes.text();
 
               const blob = new Blob([bundleCode], { type: "text/javascript" });
