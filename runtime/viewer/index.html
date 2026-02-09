@@ -126,6 +126,7 @@
   {
     "imports": {
       "react": "https://esm.sh/react@18.2.0",
+      "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
       "react-dom": "https://esm.sh/react-dom@18.2.0",
       "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
       "zod": "https://esm.sh/zod@3.22.4",
@@ -507,7 +508,6 @@
         let actorId = "viewer";
         let sharedState = {};
         let participants = [];
-        let reactRoot = null;
         let Canvas = null;
 
         function render() {
@@ -586,6 +586,7 @@
         }
 
         ws.onopen = () => {
+          reconnectAttempts = 0; // Reset backoff on successful connection
           ws.send(JSON.stringify({ type: "join", username: "viewer" }));
         };
 
@@ -599,7 +600,7 @@
 
             // Load client bundle
             try {
-              const bundleRes = await fetch(`${SERVER}/bundle`);
+              const bundleRes = await fetch(`${SERVER}/bundle?_t=${Date.now()}`);
               const bundleCode = await bundleRes.text();
 
               const blob = new Blob([bundleCode], { type: "text/javascript" });
@@ -611,7 +612,9 @@
               if (!experience?.Canvas) throw new Error("Experience has no Canvas component");
 
               Canvas = experience.Canvas;
-              reactRoot = ReactDOM.createRoot(document.getElementById("root"));
+              if (!reactRoot) {
+                reactRoot = ReactDOM.createRoot(document.getElementById("root"));
+              }
 
               document.getElementById("loading").style.display = "none";
               render();
@@ -638,7 +641,7 @@
           if (msg.type === "experience_updated") {
             // Hot reload: re-fetch bundle and re-render
             try {
-              const bundleRes = await fetch(`${SERVER}/bundle`);
+              const bundleRes = await fetch(`${SERVER}/bundle?_t=${Date.now()}`);
               const bundleCode = await bundleRes.text();
 
               const blob = new Blob([bundleCode], { type: "text/javascript" });
@@ -719,9 +722,13 @@
           console.error("[viewer] WebSocket error:", err);
         };
 
+        // Reconnect with exponential backoff (no full page reload)
         ws.onclose = () => {
-          console.log("[viewer] WebSocket closed, reconnecting in 2s...");
-          setTimeout(() => location.reload(), 2000);
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000);
+          reconnectAttempts++;
+          console.log(`[viewer] WebSocket closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
+          showToast(`Disconnected. Reconnecting in ${Math.round(delay/1000)}s...`, "info", delay + 1000);
+          setTimeout(() => start(), delay);
         };
 
       } catch (err) {
@@ -729,6 +736,8 @@
       }
     }
 
+    let reconnectAttempts = 0;
+    let reactRoot = null; // Persists across reconnects to avoid duplicate roots
     start();
   </script>
 </body>
