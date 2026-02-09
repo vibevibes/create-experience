@@ -384,10 +384,33 @@ function handleLeave(room: Room, req: express.Request, res: express.Response) {
 
 app.post("/leave", (req, res) => handleLeave(getDefaultRoom(), req, res));
 
+// ── Idempotency cache ────────────────────────────────────────
+
+const idempotencyCache = new Map<string, { output: any; ts: number }>();
+const IDEMPOTENCY_TTL = 30000; // 30 seconds
+
+// Cleanup expired entries every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of idempotencyCache) {
+    if (now - entry.ts > IDEMPOTENCY_TTL) idempotencyCache.delete(key);
+  }
+}, 60000);
+
 // ── Execute tool ────────────────────────────────────────────
 
 async function handleTool(room: Room, req: express.Request, res: express.Response) {
   if (!experience) { res.status(500).json({ error: "Experience not loaded" }); return; }
+
+  // Idempotency: return cached result if same key seen recently
+  const idempotencyKey = req.headers["x-idempotency-key"] as string | undefined;
+  if (idempotencyKey) {
+    const cached = idempotencyCache.get(idempotencyKey);
+    if (cached && Date.now() - cached.ts < IDEMPOTENCY_TTL) {
+      res.json({ output: cached.output, cached: true });
+      return;
+    }
+  }
 
   const toolName = req.params.toolName;
   const { actorId, input = {}, owner } = req.body;
@@ -461,6 +484,11 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
 
     // Emit for long-poll listeners
     roomEvents.emit(`room:${room.id}`);
+
+    // Cache for idempotency
+    if (idempotencyKey) {
+      idempotencyCache.set(idempotencyKey, { output, ts: Date.now() });
+    }
 
     res.json({ output });
   } catch (err: any) {
