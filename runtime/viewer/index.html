@@ -130,7 +130,8 @@
       "react-dom": "https://esm.sh/react-dom@18.2.0",
       "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
       "zod": "https://esm.sh/zod@3.22.4",
-      "yjs": "https://esm.sh/yjs@13.6.10"
+      "yjs": "https://esm.sh/yjs@13.6.10",
+      "@vibevibes/sdk": "/sdk.js"
     }
   }
   </script>
@@ -146,6 +147,47 @@
 
     globalThis.React = React;
     globalThis.Y = Y;
+
+    // ── Scene Engine (loaded from SDK dist) ────────────────────
+    try {
+      const sdk = await import("@vibevibes/sdk");
+      globalThis.vibevibesScene = {
+        SceneRenderer: sdk.SceneRenderer,
+        SvgSceneRenderer: sdk.SvgSceneRenderer,
+        useSceneTweens: sdk.useSceneTweens,
+        useParticleTick: sdk.useParticleTick,
+        useSceneInteraction: sdk.useSceneInteraction,
+        useSceneDrag: sdk.useSceneDrag,
+        useSceneSelection: sdk.useSceneSelection,
+        useSceneViewport: sdk.useSceneViewport,
+        createScene: sdk.createScene,
+        createNode: sdk.createNode,
+        sceneTools: sdk.sceneTools,
+        sceneHints: sdk.sceneHints,
+        createSceneTools: sdk.createSceneTools,
+        createSceneHints: sdk.createSceneHints,
+        createSceneSchemas: sdk.createSceneSchemas,
+        walkNodes: sdk.walkNodes,
+        nodeById: sdk.nodeById,
+        findNodes: sdk.findNodes,
+        allNodeIds: sdk.allNodeIds,
+        nodeCount: sdk.nodeCount,
+        cloneScene: sdk.cloneScene,
+        removeNodeById: sdk.removeNodeById,
+        findParent: sdk.findParent,
+        PathBuilder: sdk.PathBuilder,
+        easingFunctions: sdk.easingFunctions,
+        interpolateTween: sdk.interpolateTween,
+        createRuleTools: sdk.createRuleTools,
+        createRuleHints: sdk.createRuleHints,
+        ruleTools: sdk.ruleTools,
+        useRuleTick: sdk.useRuleTick,
+        nodeMatchesSelector: sdk.nodeMatchesSelector,
+      };
+    } catch (e) {
+      console.warn("[vibevibes] Scene SDK not available:", e.message);
+      globalThis.vibevibesScene = {};
+    }
     globalThis.z = z;
 
     // SDK define helpers (same contract as @vibevibes/sdk)
@@ -170,13 +212,51 @@
       return ctx?.callTool || (async () => {});
     }
 
-    function useOptimisticTool(toolName) {
+    function useOptimisticTool(callToolOrName, sharedStateArg) {
       const ctx = globalThis.__vibevibes_ctx__;
-      const callTool = ctx?.callTool || (async () => {});
-      return useCallback(
-        (input, predictFn) => callTool(toolName, input),
-        [toolName, callTool]
-      );
+      // Support both SDK signature: (callTool, sharedState) and legacy: (toolName)
+      const isSDKSignature = typeof callToolOrName === "function";
+      const callToolFn = isSDKSignature ? callToolOrName : (ctx?.callTool || (async () => {}));
+      const serverState = isSDKSignature ? sharedStateArg : (ctx?.sharedState || {});
+
+      const [optimistic, setOptimistic] = useState(null);
+      const [pending, setPending] = useState(false);
+      const pendingCountRef = useRef(0);
+
+      // When server state arrives and nothing is pending, clear optimistic overlay
+      useEffect(() => {
+        if (pendingCountRef.current === 0) setOptimistic(null);
+      }, [serverState]);
+
+      const call = useCallback(async (nameOrInput, inputOrOptState, maybeOptState) => {
+        // SDK signature: call(toolName, input, optimisticState)
+        const toolName = isSDKSignature ? nameOrInput : callToolOrName;
+        const input = isSDKSignature ? inputOrOptState : nameOrInput;
+        const optimisticState = isSDKSignature ? maybeOptState : inputOrOptState;
+
+        // Apply optimistic state IMMEDIATELY — zero latency
+        if (optimisticState) setOptimistic(optimisticState);
+        setPending(true);
+        pendingCountRef.current++;
+
+        try {
+          const result = await callToolFn(toolName, input);
+          return result;
+        } catch (err) {
+          // Rollback: server rejected — revert to server state
+          setOptimistic(null);
+          throw err;
+        } finally {
+          pendingCountRef.current--;
+          if (pendingCountRef.current === 0) {
+            setPending(false);
+            setOptimistic(null);
+          }
+        }
+      }, [callToolFn, isSDKSignature, callToolOrName]);
+
+      const state = optimistic ? { ...serverState, ...optimistic } : serverState;
+      return isSDKSignature ? { call, state, pending } : call;
     }
 
     function useParticipants() {
@@ -199,8 +279,54 @@
       }, []);
     }
 
-    function useFollow() { return [null, () => {}]; }
-    function useTypingIndicator() { return [[], () => {}]; }
+    function useFollow(actorIdArg, participantsArg, ephState, setEph) {
+      const ctx = globalThis.__vibevibes_ctx__;
+      const myId = actorIdArg || ctx?.actorId;
+      const parts = participantsArg || ctx?.participants || [];
+      const es = ephState || ctx?.ephemeralState || {};
+      const se = setEph || ctx?.setEphemeral || (() => {});
+      const myFollow = es[myId]?._follow || null;
+
+      const follow = useCallback((targetId, mode) => {
+        if (targetId === myId) return;
+        se({ _follow: { targetActorId: targetId, mode, since: Date.now() } });
+      }, [myId, se]);
+      const unfollow = useCallback(() => { se({ _follow: null }); }, [se]);
+
+      const followers = [];
+      for (const pid of parts) {
+        if (pid === myId) continue;
+        const pf = es[pid]?._follow;
+        if (pf && pf.targetActorId === myId) followers.push({ actorId: pid, mode: pf.mode, since: pf.since });
+      }
+
+      return { follow, unfollow, following: myFollow, followers };
+    }
+
+    function useTypingIndicator(actorIdArg, ephState, setEph, timeoutMs = 3000) {
+      const ctx = globalThis.__vibevibes_ctx__;
+      const myId = actorIdArg || ctx?.actorId;
+      const es = ephState || ctx?.ephemeralState || {};
+      const se = setEph || ctx?.setEphemeral || (() => {});
+      const timerRef = useRef(null);
+
+      const setTyping = useCallback((isTyping) => {
+        se({ _typing: isTyping ? Date.now() : null });
+        if (timerRef.current) clearTimeout(timerRef.current);
+        if (isTyping) {
+          timerRef.current = setTimeout(() => se({ _typing: null }), timeoutMs);
+        }
+      }, [se, timeoutMs]);
+
+      useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+      const now = Date.now();
+      const typingUsers = Object.entries(es)
+        .filter(([id, data]) => id !== myId && data._typing && (now - data._typing) < timeoutMs + 2000)
+        .map(([id]) => id);
+
+      return { setTyping, typingUsers };
+    }
 
     // useUndo — tracks state snapshots, restores via _state.restore tool
     function useUndo(sharedState, callTool, opts) {
@@ -693,6 +819,7 @@
 
     // Room-aware: read ?room= query param (defaults to "local" for host experience)
     const ROOM_ID = new URLSearchParams(location.search).get("room") || "local";
+    const ROOM_TOKEN = new URLSearchParams(location.search).get("token") || "";
 
     function showError(msg) {
       document.getElementById("loading").style.display = "none";
@@ -712,15 +839,50 @@
         let Canvas = null;
         let hotReloadKey = 0;
 
+        // ── Optimistic state layer ──────────────────────────────
+        // Tracks in-flight optimistic overlays keyed by a unique call ID.
+        // Each overlay is { state: {...}, ts: number }.
+        // Display state = sharedState merged with all active overlays.
+        let optimisticOverlays = new Map();
+        let optimisticSeq = 0;
+
+        function getDisplayState() {
+          if (optimisticOverlays.size === 0) return sharedState;
+          let merged = { ...sharedState };
+          for (const overlay of optimisticOverlays.values()) {
+            Object.assign(merged, overlay.state);
+          }
+          return merged;
+        }
+
+        // ── Ephemeral state (high-frequency, no tool gate) ──────
+        let ephemeralState = {};
+
+        function setEphemeral(data) {
+          ephemeralState = {
+            ...ephemeralState,
+            [actorId]: { ...(ephemeralState[actorId] || {}), ...data },
+          };
+          // Broadcast to server for relay to other participants
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ephemeral", actorId, data }));
+          }
+          render();
+        }
+
         function render() {
           if (!Canvas || !reactRoot) return;
 
+          const displayState = getDisplayState();
+
           // Expose context for hooks
           globalThis.__vibevibes_ctx__ = {
-            sharedState,
+            sharedState: displayState,
             callTool,
             participants,
             actorId,
+            ephemeralState,
+            setEphemeral,
           };
 
           reactRoot.render(
@@ -728,22 +890,31 @@
               ce(Canvas, {
                 roomId: ROOM_ID,
                 actorId,
-                sharedState,
+                sharedState: displayState,
                 callTool,
                 participants,
-                ephemeralState: {},
-                setEphemeral: () => {},
+                ephemeralState,
+                setEphemeral,
                 roomConfig,
               })
             )
           );
         }
 
-        async function callTool(name, input) {
+        async function callTool(name, input, _optimisticState) {
+          // If an optimistic state is provided, apply it IMMEDIATELY
+          let overlayId = null;
+          if (_optimisticState) {
+            overlayId = ++optimisticSeq;
+            optimisticOverlays.set(overlayId, { state: _optimisticState, ts: Date.now() });
+            render(); // Re-render with predicted state at T=0ms
+          }
+
           try {
-            const toolUrl = ROOM_ID === "local"
+            const baseToolUrl = ROOM_ID === "local"
               ? `${SERVER}/tools/${name}`
               : `${SERVER}/rooms/${ROOM_ID}/tools/${name}`;
+            const toolUrl = ROOM_TOKEN ? `${baseToolUrl}?token=${ROOM_TOKEN}` : baseToolUrl;
             const res = await fetch(toolUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -760,6 +931,12 @@
               showToast(`Tool '${name}' failed: ${err.message}`);
             }
             throw err;
+          } finally {
+            // Clear this overlay — server state broadcast will take over
+            if (overlayId !== null) {
+              optimisticOverlays.delete(overlayId);
+              render(); // Re-render with server-authoritative state
+            }
           }
         }
 
@@ -839,9 +1016,25 @@
           if (msg.type === "shared_state_update") {
             sharedState = msg.state;
             participants = msg.participants || participants;
+            // Server is authoritative — clear all optimistic overlays.
+            // If prediction was correct, display doesn't change (merged state ≈ server state).
+            // If prediction was wrong, we snap to server truth.
+            optimisticOverlays.clear();
             render();
             updateParticipantList(participants);
             if (msg.event) addActivityEvent(msg.event);
+          }
+
+          if (msg.type === "ephemeral") {
+            // Another participant's ephemeral data — merge into ephemeralState
+            const senderId = msg.actorId;
+            if (senderId && senderId !== actorId) {
+              ephemeralState = {
+                ...ephemeralState,
+                [senderId]: { ...(ephemeralState[senderId] || {}), ...msg.data },
+              };
+              render();
+            }
           }
 
           if (msg.type === "presence_update") {

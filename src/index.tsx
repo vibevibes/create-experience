@@ -26,15 +26,22 @@ function uid() {
 // ── Emoji map ───────────────────────────────────────────────────────────
 
 const EMOJI: Record<string, string> = {
-  tree: "🌳", rock: "🪨", water: "🌊", flower: "🌻", house: "🏡",
-  creature: "🐾", player: "🧑‍🌾", ai: "🤖",
+  hospital: "🏥",
+  barracks: "🏰",
+  farm: "🌾",
+  wall: "🧱",
+  kid: "👶",
+  soldier: "💂",
+  farmer: "🧑‍🌾",
+  player: "👤",
+  ai: "🤖",
 };
 
 // ── Tools ───────────────────────────────────────────────────────────────
 
 const tools = [
   defineTool({
-    name: "sandbox.say",
+    name: "village.say",
     description: "Say something in the world. Everyone sees it.",
     input_schema: z.object({ text: z.string().min(1).max(500) }),
     handler: (ctx, input) => {
@@ -46,44 +53,93 @@ const tools = [
   }),
 
   defineTool({
-    name: "sandbox.move",
-    description: "Move your entity to a position in the world.",
-    input_schema: z.object({ x: z.number().min(0).max(W), y: z.number().min(0).max(H) }),
+    name: "village.spawn_kid",
+    description: "Spawn a kid from a hospital. Specify which side (left or right).",
+    input_schema: z.object({
+      side: z.enum(["left", "right"]),
+    }),
     handler: (ctx, input) => {
       const state = ctx.state as any;
-      const target = { x: input.x, y: input.y };
-      const entities = [...(state.entities || [])];
-      const idx = entities.findIndex((e: any) => e.id === ctx.actorId);
-      if (idx >= 0) {
-        entities[idx] = { ...entities[idx], target };
-      } else {
-        entities.push({
-          id: ctx.actorId,
-          type: ctx.actorId.includes("-ai-") ? "ai" : "player",
-          pos: target,
-          target,
-          label: ctx.actorId.split("-")[0],
-        });
-      }
-      ctx.setState({ ...state, entities });
-      return { moved: target };
+      const side = input.side;
+      const hospital = (state.buildings || []).find((b: any) => b.type === "hospital" && b.side === side);
+      if (!hospital) return { error: "No hospital on that side" };
+
+      const kid = {
+        id: uid(),
+        type: "kid",
+        pos: { x: hospital.pos.x, y: hospital.pos.y + 40 },
+        side,
+        state: "idle",
+      };
+      ctx.setState({ ...state, units: [...(state.units || []), kid] });
+      return { spawned: kid.id, side };
     },
   }),
 
   defineTool({
-    name: "sandbox.spawn",
-    description: "Place a new entity in the world.",
+    name: "village.assign_kid",
+    description: "Assign a kid to either barracks (become soldier) or farm (become farmer).",
     input_schema: z.object({
-      type: z.string().min(1),
-      x: z.number().min(0).max(W),
-      y: z.number().min(0).max(H),
-      label: z.string().optional(),
+      kidId: z.string(),
+      destination: z.enum(["barracks", "farm"]),
     }),
     handler: (ctx, input) => {
       const state = ctx.state as any;
-      const entity = { id: uid(), type: input.type, pos: { x: input.x, y: input.y }, label: input.label };
-      ctx.setState({ ...state, entities: [...(state.entities || []), entity] });
-      return { spawned: entity.id, type: input.type };
+      const units = [...(state.units || [])];
+      const idx = units.findIndex((u: any) => u.id === input.kidId);
+      if (idx < 0) return { error: "Kid not found" };
+
+      const kid = units[idx];
+      if (kid.type !== "kid") return { error: "Unit is not a kid" };
+
+      const building = (state.buildings || []).find(
+        (b: any) => b.type === input.destination && b.side === kid.side
+      );
+      if (!building) return { error: "Building not found on that side" };
+
+      // Set the kid to move toward the building
+      units[idx] = { ...kid, target: building.pos, destination: input.destination };
+      ctx.setState({ ...state, units });
+      return { assigned: input.kidId, destination: input.destination };
+    },
+  }),
+
+  defineTool({
+    name: "village.tick",
+    description: "Process game tick - convert kids who reached their destination, update resources.",
+    input_schema: z.object({}),
+    handler: (ctx) => {
+      const state = ctx.state as any;
+      const units = [...(state.units || [])];
+      let resources = { ...state.resources } || { left: { food: 0, soldiers: 0 }, right: { food: 0, soldiers: 0 } };
+
+      for (let i = 0; i < units.length; i++) {
+        const unit = units[i];
+
+        // Convert kids who reached destination
+        if (unit.type === "kid" && unit.destination && unit.target) {
+          const dx = unit.target.x - unit.pos.x;
+          const dy = unit.target.y - unit.pos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 15) {
+            if (unit.destination === "barracks") {
+              units[i] = { ...unit, type: "soldier", destination: undefined, target: undefined };
+              resources[unit.side].soldiers = (resources[unit.side].soldiers || 0) + 1;
+            } else if (unit.destination === "farm") {
+              units[i] = { ...unit, type: "farmer", destination: undefined, target: undefined };
+            }
+          }
+        }
+
+        // Farmers generate food
+        if (unit.type === "farmer" && Math.random() < 0.1) {
+          resources[unit.side].food = (resources[unit.side].food || 0) + 1;
+        }
+      }
+
+      ctx.setState({ ...state, units, resources });
+      return { updated: true };
     },
   }),
 
@@ -110,10 +166,35 @@ function GrassBackground() {
 
 // ── Entity rendering ────────────────────────────────────────────────────
 
-function EntityNode({ entity, pos }: { entity: any; pos: { x: number; y: number } }) {
-  const isPlayer = entity.type === "player" || entity.type === "ai";
-  const size = isPlayer ? 32 : entity.type === "tree" ? 36 : entity.type === "house" ? 38 : 24;
-  const emoji = EMOJI[entity.type] || "❓";
+function BuildingNode({ building }: { building: any }) {
+  const emoji = EMOJI[building.type] || "❓";
+  const size = building.type === "hospital" ? 48 : building.type === "wall" ? 32 : 44;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: building.pos.x - size / 2,
+        top: building.pos.y - size / 2,
+        width: size,
+        height: size,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: size * 0.85,
+        zIndex: 5,
+        filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.4))",
+      }}
+      title={building.type}
+    >
+      <span style={{ lineHeight: 1 }}>{emoji}</span>
+    </div>
+  );
+}
+
+function UnitNode({ unit, pos }: { unit: any; pos: { x: number; y: number } }) {
+  const emoji = EMOJI[unit.type] || "❓";
+  const size = 28;
 
   return (
     <div
@@ -127,43 +208,34 @@ function EntityNode({ entity, pos }: { entity: any; pos: { x: number; y: number 
         alignItems: "center",
         justifyContent: "center",
         fontSize: size * 0.85,
-        zIndex: isPlayer ? 20 : Math.round(pos.y),
+        zIndex: Math.round(pos.y),
         filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.3))",
+        cursor: unit.type === "kid" ? "pointer" : "default",
       }}
-      title={entity.label || entity.type}
+      title={unit.type}
     >
       <span style={{ lineHeight: 1 }}>{emoji}</span>
-      {entity.label && (
-        <div style={{
-          position: "absolute", top: -16, whiteSpace: "nowrap",
-          fontSize: 10, fontWeight: 600, textAlign: "center",
-          color: isPlayer ? "#fff" : "#c8dfc0",
-          textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-        }}>
-          {entity.label}
-        </div>
-      )}
     </div>
   );
 }
 
 // ── Animated positions hook ─────────────────────────────────────────────
 
-function useAnimatedPositions(entities: any[]) {
+function useAnimatedPositions(units: any[]) {
   const posRef = useRef<Record<string, { x: number; y: number }>>({});
   const [display, setDisplay] = useState<Record<string, { x: number; y: number }>>({});
   const rafRef = useRef(0);
   const lastRef = useRef(0);
 
   useEffect(() => {
-    for (const e of entities) {
-      if (!posRef.current[e.id]) posRef.current[e.id] = { ...e.pos };
+    for (const u of units) {
+      if (!posRef.current[u.id]) posRef.current[u.id] = { ...u.pos };
     }
-    const ids = new Set(entities.map((e: any) => e.id));
+    const ids = new Set(units.map((u: any) => u.id));
     for (const id of Object.keys(posRef.current)) {
       if (!ids.has(id)) delete posRef.current[id];
     }
-  }, [entities]);
+  }, [units]);
 
   useEffect(() => {
     function tick(now: number) {
@@ -171,19 +243,19 @@ function useAnimatedPositions(entities: any[]) {
       const dt = Math.min((now - lastRef.current) / 1000, 0.1);
       lastRef.current = now;
       let moved = false;
-      for (const e of entities) {
-        const target = e.target || e.pos;
-        const cur = posRef.current[e.id] || { ...e.pos };
+      for (const u of units) {
+        const target = u.target || u.pos;
+        const cur = posRef.current[u.id] || { ...u.pos };
         const dx = target.x - cur.x, dy = target.y - cur.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > 1) {
-          const step = Math.min(120 * dt, dist);
+          const step = Math.min(80 * dt, dist);
           cur.x += (dx / dist) * step;
           cur.y += (dy / dist) * step;
-          posRef.current[e.id] = cur;
+          posRef.current[u.id] = cur;
           moved = true;
         } else if (dist > 0) {
-          posRef.current[e.id] = { ...target };
+          posRef.current[u.id] = { ...target };
           moved = true;
         }
       }
@@ -192,7 +264,7 @@ function useAnimatedPositions(entities: any[]) {
     }
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [entities]);
+  }, [units]);
 
   return display;
 }
@@ -201,29 +273,40 @@ function useAnimatedPositions(entities: any[]) {
 
 function Canvas(props: any) {
   const { sharedState, callTool, actorId, ephemeralState, setEphemeral, participants } = props;
-  const state = sharedState || { entities: [], messages: [] };
-  const entities = state.entities || [];
+  const state = sharedState || { buildings: [], units: [], messages: [], resources: { left: { food: 0, soldiers: 0 }, right: { food: 0, soldiers: 0 } } };
+  const buildings = state.buildings || [];
+  const units = state.units || [];
   const messages = state.messages || [];
-  const display = useAnimatedPositions(entities);
-  const [chatInput, setChatInput] = useState("");
+  const resources = state.resources || { left: { food: 0, soldiers: 0 }, right: { food: 0, soldiers: 0 } };
+  const display = useAnimatedPositions(units);
+  const [selectedKid, setSelectedKid] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [messages.length]);
 
-  const handleWorldClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    callTool("sandbox.move", { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) });
+  // Auto-tick every 2 seconds for low latency
+  useEffect(() => {
+    const interval = setInterval(() => {
+      callTool("village.tick", {});
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [callTool]);
+
+  const handleUnitClick = (unitId: string, unitType: string) => {
+    if (unitType === "kid") {
+      setSelectedKid(unitId);
+    }
   };
 
-  const handleSay = () => {
-    if (!chatInput.trim()) return;
-    callTool("sandbox.say", { text: chatInput.trim() });
-    setChatInput("");
+  const handleAssign = (destination: "barracks" | "farm") => {
+    if (!selectedKid) return;
+    callTool("village.assign_kid", { kidId: selectedKid, destination });
+    setSelectedKid(null);
   };
 
-  const sorted = [...entities].sort((a, b) => {
+  const sorted = [...units].sort((a, b) => {
     return ((display[a.id] || a.pos).y) - ((display[b.id] || b.pos).y);
   });
 
@@ -231,66 +314,126 @@ function Canvas(props: any) {
     <div style={{ display: "flex", height: "100vh", background: "#1a120a", color: "#e5dcc8", fontFamily: "system-ui, -apple-system, sans-serif" }}>
       {/* World */}
       <div
-        onClick={handleWorldClick}
         style={{
           position: "relative", width: W, height: H, margin: 16,
-          borderRadius: 12, overflow: "hidden", cursor: "crosshair", flexShrink: 0,
+          borderRadius: 12, overflow: "hidden", flexShrink: 0,
           border: "3px solid #5a4020", boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
         }}
       >
         <GrassBackground />
-        {sorted.map((e) => (
-          <EntityNode key={e.id} entity={e} pos={display[e.id] || e.pos} />
+
+        {/* Buildings */}
+        {buildings.map((b: any) => (
+          <BuildingNode key={b.id} building={b} />
         ))}
-        {entities.length === 0 && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 16, color: "#8a7a5a", pointerEvents: "none", fontWeight: 600,
-          }}>
-            Click anywhere to enter the world
+
+        {/* Units */}
+        {sorted.map((u: any) => (
+          <div key={u.id} onClick={() => handleUnitClick(u.id, u.type)}>
+            <UnitNode unit={u} pos={display[u.id] || u.pos} />
+            {selectedKid === u.id && (
+              <div style={{
+                position: "absolute",
+                left: (display[u.id] || u.pos).x - 20,
+                top: (display[u.id] || u.pos).y - 50,
+                background: "rgba(0,0,0,0.8)",
+                padding: "4px 8px",
+                borderRadius: 4,
+                fontSize: 11,
+                border: "1px solid #60a5fa",
+              }}>
+                Selected
+              </div>
+            )}
           </div>
-        )}
+        ))}
       </div>
 
-      {/* Chat panel */}
+      {/* Control panel */}
       <div style={{
         flex: 1, display: "flex", flexDirection: "column", margin: "16px 16px 16px 0", minWidth: 0,
         background: "linear-gradient(180deg, #2a1a0a 0%, #1f140a 100%)", borderRadius: 12,
-        border: "2px solid #5a4020", padding: 16,
+        border: "2px solid #5a4020", padding: 16, gap: 16,
       }}>
-        <h2 style={{ margin: "0 0 12px 0", fontSize: 17, fontWeight: 800, color: "#d4a44a", letterSpacing: 1, borderBottom: "1px solid #3a2a10", paddingBottom: 10 }}>
-          The Sandbox
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: "#d4a44a", letterSpacing: 1, borderBottom: "1px solid #3a2a10", paddingBottom: 10 }}>
+          Village Wars
         </h2>
-        <div ref={chatRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2, paddingRight: 8 }}>
-          {messages.map((msg: any) => (
-            <div key={msg.id} style={{ fontSize: 13, lineHeight: 1.5, padding: "5px 0", borderBottom: "1px solid #2a1a0a" }}>
-              <span style={{
-                fontWeight: 700, marginRight: 6,
-                color: msg.actor === "system" ? "#8a7a5a" : msg.actor.includes("-ai-") ? "#c084fc" : "#60a5fa",
-              }}>
-                {msg.actor === "system" ? "system" : msg.actor.includes("-ai-") ? "🤖 ai" : `🧑‍🌾 ${msg.actor.split("-")[0]}`}:
-              </span>
-              <span style={{ color: "#d4c4a0" }}>{msg.text}</span>
-            </div>
-          ))}
+
+        {/* Resources */}
+        <div style={{ display: "flex", gap: 16 }}>
+          <div style={{ flex: 1, padding: 12, background: "#2a1a0a", borderRadius: 8, border: "1px solid #3a2a10" }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: 13, fontWeight: 700, color: "#60a5fa" }}>Left Village</h3>
+            <div style={{ fontSize: 12 }}>🌾 Food: {resources.left?.food || 0}</div>
+            <div style={{ fontSize: 12 }}>💂 Soldiers: {resources.left?.soldiers || 0}</div>
+          </div>
+          <div style={{ flex: 1, padding: 12, background: "#2a1a0a", borderRadius: 8, border: "1px solid #3a2a10" }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: 13, fontWeight: 700, color: "#c084fc" }}>Right Village</h3>
+            <div style={{ fontSize: 12 }}>🌾 Food: {resources.right?.food || 0}</div>
+            <div style={{ fontSize: 12 }}>💂 Soldiers: {resources.right?.soldiers || 0}</div>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <input
-            type="text" value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSay()}
-            placeholder="Say something..."
+
+        {/* Actions */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button
+            onClick={() => callTool("village.spawn_kid", { side: "left" })}
             style={{
-              flex: 1, padding: "10px 14px", fontSize: 13, background: "#1a0f05",
-              border: "2px solid #5a4020", borderRadius: 8, color: "#e5dcc8", outline: "none",
+              padding: "10px 14px", fontSize: 13, fontWeight: 700, background: "#1e40af",
+              color: "#fff", border: "2px solid #3b82f6", borderRadius: 8, cursor: "pointer",
             }}
-          />
-          <button onClick={handleSay} style={{
-            padding: "10px 18px", fontSize: 13, fontWeight: 700, background: "#b45309",
-            color: "#fff", border: "2px solid #d97706", borderRadius: 8, cursor: "pointer",
-          }}>
-            Say
+          >
+            👶 Spawn Kid (Left)
           </button>
+          <button
+            onClick={() => callTool("village.spawn_kid", { side: "right" })}
+            style={{
+              padding: "10px 14px", fontSize: 13, fontWeight: 700, background: "#6b21a8",
+              color: "#fff", border: "2px solid #a855f7", borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            👶 Spawn Kid (Right)
+          </button>
+
+          {selectedKid && (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={() => handleAssign("barracks")}
+                style={{
+                  flex: 1, padding: "10px 14px", fontSize: 13, fontWeight: 700, background: "#b45309",
+                  color: "#fff", border: "2px solid #d97706", borderRadius: 8, cursor: "pointer",
+                }}
+              >
+                🏰 Send to Barracks
+              </button>
+              <button
+                onClick={() => handleAssign("farm")}
+                style={{
+                  flex: 1, padding: "10px 14px", fontSize: 13, fontWeight: 700, background: "#15803d",
+                  color: "#fff", border: "2px solid #22c55e", borderRadius: 8, cursor: "pointer",
+                }}
+              >
+                🌾 Send to Farm
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Chat */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 700, color: "#d4a44a" }}>Chat</h3>
+          <div ref={chatRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2, paddingRight: 8 }}>
+            {messages.map((msg: any) => (
+              <div key={msg.id} style={{ fontSize: 12, lineHeight: 1.5, padding: "3px 0" }}>
+                <span style={{
+                  fontWeight: 700, marginRight: 6,
+                  color: msg.actor === "system" ? "#8a7a5a" : msg.actor.includes("-ai-") ? "#c084fc" : "#60a5fa",
+                }}>
+                  {msg.actor === "system" ? "system" : msg.actor.includes("-ai-") ? "🤖" : "👤"}:
+                </span>
+                <span style={{ color: "#d4c4a0" }}>{msg.text}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -312,26 +455,24 @@ function Canvas(props: any) {
 
 export default defineExperience({
   manifest: {
-    id: "the-sandbox",
-    title: "The Sandbox",
-    description: "A 2D world where human and AI build together in real-time.",
+    id: "village-wars",
+    title: "Village Wars",
+    description: "A strategy game where you manage villages, spawn kids, and assign them to become soldiers or farmers.",
     version: "0.1.0",
     requested_capabilities: [],
-    category: "creative",
-    tags: ["sandbox", "creative", "2d", "worldbuilding"],
+    category: "game",
+    tags: ["strategy", "villages", "resource-management"],
     agentSlots: [
       {
-        role: "builder",
-        systemPrompt: `You are a builder in a shared 2D sandbox world. You and the human both exist as entities in this world. You can see the world state and chat messages via watch.
+        role: "opponent",
+        systemPrompt: `You are managing the RIGHT village in a strategy game. Your goal is to build a strong village by:
+1. Spawning kids from the hospital using village.spawn_kid with side: "right"
+2. Assigning kids to either barracks (to become soldiers) or farms (to become farmers)
+3. Balancing your economy - farmers generate food, soldiers protect the village
 
-When the human asks you to build something:
-1. Use sandbox.say to acknowledge what you're building
-2. Use sandbox.spawn to place new entities (tree, rock, water, flower, house, creature)
-3. Use sandbox.move to move yourself around the world
-
-The world is ${W}x${H} pixels. Position entities within these bounds.
-You can also use _chat.send to reply in the collapsible chat panel.`,
-        allowedTools: ["sandbox.say", "sandbox.move", "sandbox.spawn", "_chat.send"],
+Use village.say to comment on your strategy or react to the game state.
+You can see the current resources and units via the watch state.`,
+        allowedTools: ["village.say", "village.spawn_kid", "village.assign_kid", "_chat.send"],
         autoSpawn: true,
         maxInstances: 1,
       },
@@ -341,43 +482,47 @@ You can also use _chat.send to reply in the collapsible chat panel.`,
   tools,
   agentHints: [...createChatHints(), ...createBugReportHints()],
   initialState: {
-    entities: [],
-    messages: [
-      { id: "welcome", actor: "system", text: "Welcome to The Sandbox. Click the world to enter, then tell the AI what to build.", ts: Date.now() },
+    buildings: [
+      // Left village
+      { id: "hospital-left", type: "hospital", side: "left", pos: { x: 150, y: 100 } },
+      { id: "barracks-left", type: "barracks", side: "left", pos: { x: 150, y: 250 } },
+      { id: "farm-left", type: "farm", side: "left", pos: { x: 150, y: 400 } },
+      // Walls
+      { id: "wall-1", type: "wall", side: "middle", pos: { x: 400, y: 100 } },
+      { id: "wall-2", type: "wall", side: "middle", pos: { x: 400, y: 200 } },
+      { id: "wall-3", type: "wall", side: "middle", pos: { x: 400, y: 300 } },
+      { id: "wall-4", type: "wall", side: "middle", pos: { x: 400, y: 400 } },
+      { id: "wall-5", type: "wall", side: "middle", pos: { x: 400, y: 500 } },
+      // Right village
+      { id: "hospital-right", type: "hospital", side: "right", pos: { x: 650, y: 100 } },
+      { id: "barracks-right", type: "barracks", side: "right", pos: { x: 650, y: 250 } },
+      { id: "farm-right", type: "farm", side: "right", pos: { x: 650, y: 400 } },
     ],
+    units: [],
+    messages: [
+      { id: "welcome", actor: "system", text: "Welcome to Village Wars! Spawn kids from hospitals and assign them to barracks or farms.", ts: Date.now() },
+    ],
+    resources: {
+      left: { food: 0, soldiers: 0 },
+      right: { food: 0, soldiers: 0 },
+    },
   },
   tests: [
     defineTest({
-      name: "say adds message",
+      name: "spawn kid creates unit",
       run: async ({ tool, ctx: makeCtx, expect }) => {
-        const say = tool("sandbox.say");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await say.handler(c, { text: "hello" });
+        const spawn = tool("village.spawn_kid");
+        const initialState = {
+          buildings: [{ id: "h1", type: "hospital", side: "left", pos: { x: 100, y: 100 } }],
+          units: [],
+          messages: [],
+          resources: { left: { food: 0, soldiers: 0 }, right: { food: 0, soldiers: 0 } },
+        };
+        const c = makeCtx({ state: initialState });
+        await spawn.handler(c, { side: "left" });
         const s = c.getState();
-        expect(s.messages.length).toBe(1);
-        expect(s.messages[0].text).toBe("hello");
-      },
-    }),
-    defineTest({
-      name: "spawn creates entity",
-      run: async ({ tool, ctx: makeCtx, expect }) => {
-        const spawn = tool("sandbox.spawn");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await spawn.handler(c, { type: "tree", x: 100, y: 100 });
-        const s = c.getState();
-        expect(s.entities.length).toBe(1);
-        expect(s.entities[0].type).toBe("tree");
-      },
-    }),
-    defineTest({
-      name: "move creates player entity if missing",
-      run: async ({ tool, ctx: makeCtx, expect }) => {
-        const move = tool("sandbox.move");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await move.handler(c, { x: 50, y: 50 });
-        const s = c.getState();
-        expect(s.entities.length).toBe(1);
-        expect(s.entities[0].pos.x).toBe(50);
+        expect(s.units.length).toBe(1);
+        expect(s.units[0].type).toBe("kid");
       },
     }),
   ],

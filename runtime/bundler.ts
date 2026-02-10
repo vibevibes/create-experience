@@ -50,8 +50,8 @@ const CJS_BASE_SHIMS: Record<string, string> = {
   import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
   import_zod: "{ z: z, default: z }",
   import_yjs: "{ default: Y }",
-  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
-  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
 };
 
 /**
@@ -133,7 +133,8 @@ export async function bundleForServer(entryPath: string) {
  * Evaluate a server bundle and extract the ExperienceModule.
  */
 export async function evalServerBundle(serverCode: string): Promise<any> {
-  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = await import("@vibevibes/sdk");
+  const sdk = await import("@vibevibes/sdk");
+  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = sdk;
   // Stub React for server-side (tools don't render)
   const noop = () => null;
   const stubReact = {
@@ -145,14 +146,48 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const zodModule = await import("zod");
   const z = zodModule.z ?? zodModule.default ?? zodModule;
 
-  // Stubs for chat/bug-report tools (browser-only, but referenced in CJS shims)
-  const createChatTools = () => [];
-  const createChatHints = () => [];
+  // Stubs for browser-only components (referenced in CJS shims)
+  const createChatTools = (sdk as any).createChatTools ?? (() => []);
+  const createChatHints = (sdk as any).createChatHints ?? (() => []);
   const useChat = noop;
   const ChatPanel = noop;
-  const createBugReportTools = () => [];
-  const createBugReportHints = () => [];
+  const createBugReportTools = (sdk as any).createBugReportTools ?? (() => []);
+  const createBugReportHints = (sdk as any).createBugReportHints ?? (() => []);
   const ReportBug = noop;
+
+  // Scene-related exports (tools work server-side, renderers/hooks are stubs)
+  const SceneRenderer = noop;
+  const useSceneTweens = noop;
+  const useParticleTick = noop;
+  const useSceneInteraction = noop;
+  const useSceneDrag = noop;
+  const useSceneSelection = noop;
+  const useSceneViewport = noop;
+  const createScene = (sdk as any).createScene ?? ((opts: any) => ({ _sceneVersion: 1, root: { id: 'root', type: 'group', children: [] }, camera: { x: 400, y: 300, zoom: 1 }, background: opts?.background ?? '#1a1a2e', width: opts?.width ?? 800, height: opts?.height ?? 600, gradients: [], filters: [] }));
+  const createNode = (sdk as any).createNode ?? noop;
+  const sceneTools = (sdk as any).sceneTools ?? (() => []);
+  const sceneHints = (sdk as any).sceneHints ?? (() => []);
+  const createSceneTools = (sdk as any).createSceneTools ?? (() => []);
+  const createSceneHints = (sdk as any).createSceneHints ?? (() => []);
+  const walkNodes = (sdk as any).walkNodes ?? noop;
+  const nodeById = (sdk as any).nodeById ?? noop;
+  const findNodes = (sdk as any).findNodes ?? (() => []);
+  const allNodeIds = (sdk as any).allNodeIds ?? (() => []);
+  const nodeCount = (sdk as any).nodeCount ?? (() => 0);
+  const cloneScene = (sdk as any).cloneScene ?? ((s: any) => JSON.parse(JSON.stringify(s)));
+  const removeNodeById = (sdk as any).removeNodeById ?? noop;
+  const findParent = (sdk as any).findParent ?? noop;
+  const PathBuilder = (sdk as any).PathBuilder ?? {};
+  const createSceneSchemas = (sdk as any).createSceneSchemas ?? noop;
+  const easingFunctions = (sdk as any).easingFunctions ?? {};
+  const interpolateTween = (sdk as any).interpolateTween ?? noop;
+
+  // Rule engine exports
+  const createRuleTools = (sdk as any).createRuleTools ?? (() => []);
+  const createRuleHints = (sdk as any).createRuleHints ?? (() => []);
+  const ruleTools = (sdk as any).ruleTools ?? (() => []);
+  const useRuleTick = noop;
+  const nodeMatchesSelector = (sdk as any).nodeMatchesSelector ?? (() => false);
 
   const fn = new Function(
     "React", "Y", "z",
@@ -160,6 +195,14 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
     "defineRoomConfig",
     "createChatTools", "createChatHints", "useChat", "ChatPanel",
     "createBugReportTools", "createBugReportHints", "ReportBug",
+    "SceneRenderer", "useSceneTweens", "useParticleTick",
+    "useSceneInteraction", "useSceneDrag", "useSceneSelection", "useSceneViewport",
+    "createScene", "createNode", "sceneTools", "sceneHints",
+    "createSceneTools", "createSceneHints",
+    "walkNodes", "nodeById", "findNodes", "allNodeIds", "nodeCount",
+    "cloneScene", "removeNodeById", "findParent",
+    "PathBuilder", "createSceneSchemas", "easingFunctions", "interpolateTween",
+    "createRuleTools", "createRuleHints", "ruleTools", "useRuleTick", "nodeMatchesSelector",
     "require", "exports", "module", "console",
     `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : (typeof module !== 'undefined' ? module.exports : undefined);`
   );
@@ -171,6 +214,14 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
     defineRoomConfig,
     createChatTools, createChatHints, useChat, ChatPanel,
     createBugReportTools, createBugReportHints, ReportBug,
+    SceneRenderer, useSceneTweens, useParticleTick,
+    useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport,
+    createScene, createNode, sceneTools, sceneHints,
+    createSceneTools, createSceneHints,
+    walkNodes, nodeById, findNodes, allNodeIds, nodeCount,
+    cloneScene, removeNodeById, findParent,
+    PathBuilder, createSceneSchemas, easingFunctions, interpolateTween,
+    createRuleTools, createRuleHints, ruleTools, useRuleTick, nodeMatchesSelector,
     () => ({}), fakeModule.exports, fakeModule, console,
   );
 
@@ -240,6 +291,7 @@ const createChatTools = globalThis.createChatTools || (() => []);
 const createChatHints = globalThis.createChatHints || (() => []);
 const createBugReportTools = globalThis.createBugReportTools || (() => []);
 const createBugReportHints = globalThis.createBugReportHints || (() => []);
+const { SceneRenderer, useSceneTweens, useParticleTick, useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport, createScene, createNode, sceneTools, sceneHints, createSceneTools, createSceneHints, walkNodes, nodeById, findNodes, allNodeIds, nodeCount, cloneScene, removeNodeById, findParent, PathBuilder, createSceneSchemas, easingFunctions, interpolateTween, createRuleTools, createRuleHints, ruleTools, useRuleTick, nodeMatchesSelector } = globalThis.vibevibesScene || {};
 `;
 
   // When multiple files import the same external, esbuild ESM creates numbered
@@ -265,6 +317,29 @@ const createBugReportHints = globalThis.createBugReportHints || (() => []);
     ChatPanel: "ChatPanel",
     ReportBug: "ReportBug",
     useChat: "useChat",
+    SceneRenderer: "SceneRenderer",
+    useSceneTweens: "useSceneTweens",
+    useParticleTick: "useParticleTick",
+    useSceneInteraction: "useSceneInteraction",
+    useSceneDrag: "useSceneDrag",
+    useSceneSelection: "useSceneSelection",
+    useSceneViewport: "useSceneViewport",
+    createScene: "createScene",
+    createNode: "createNode",
+    sceneTools: "sceneTools",
+    sceneHints: "sceneHints",
+    createSceneTools: "createSceneTools",
+    createSceneHints: "createSceneHints",
+    walkNodes: "walkNodes",
+    nodeById: "nodeById",
+    findNodes: "findNodes",
+    cloneScene: "cloneScene",
+    PathBuilder: "PathBuilder",
+    createRuleTools: "createRuleTools",
+    createRuleHints: "createRuleHints",
+    ruleTools: "ruleTools",
+    useRuleTick: "useRuleTick",
+    nodeMatchesSelector: "nodeMatchesSelector",
   };
 
   const aliasLines: string[] = [];

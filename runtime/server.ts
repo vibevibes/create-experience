@@ -507,6 +507,17 @@ app.get("/", (_req, res) => {
 });
 app.use("/viewer", express.static(path.join(__dirname, "viewer")));
 
+// Serve SDK ESM bundle (for scene engine and other SDK features in browser)
+app.get("/sdk.js", (_req, res) => {
+  const sdkPath = path.join(__dirname, "..", "node_modules", "@vibevibes", "sdk", "dist", "index.js");
+  if (fs.existsSync(sdkPath)) {
+    res.setHeader("Content-Type", "application/javascript");
+    res.sendFile(sdkPath);
+  } else {
+    res.status(404).send("// SDK not found");
+  }
+});
+
 // ── Room state endpoint (flat = default room) ──────────────
 
 app.get("/state", (_req, res) => {
@@ -1179,6 +1190,28 @@ export async function startServer() {
             type: "presence_update",
             participants: room.participantList(),
           });
+        }
+
+        if (msg.type === "ephemeral") {
+          // Relay ephemeral data to all OTHER clients in the same room.
+          // No validation, no persistence — this is the fast path for cursors,
+          // typing indicators, follow mode, and other high-frequency cosmetic data.
+          for (const room of rooms.values()) {
+            const senderActorId = room.wsConnections.get(ws);
+            if (senderActorId) {
+              const payload = JSON.stringify({
+                type: "ephemeral",
+                actorId: senderActorId,
+                data: msg.data,
+              });
+              for (const [otherWs, otherId] of room.wsConnections.entries()) {
+                if (otherWs !== ws && otherWs.readyState === WebSocket.OPEN) {
+                  otherWs.send(payload);
+                }
+              }
+              break;
+            }
+          }
         }
 
         if (msg.type === "screenshot_response") {

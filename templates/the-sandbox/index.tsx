@@ -10,375 +10,514 @@ import {
   createChatHints,
   createBugReportTools,
   createBugReportHints,
+  SceneRenderer,
+  useSceneTweens,
+  useParticleTick,
+  useSceneInteraction,
+  useSceneDrag,
+  sceneTools,
+  ruleTools,
+  createScene,
+  useRuleTick,
+  walkNodes,
+  nodeById,
 } from "@vibevibes/sdk";
 
-const { useState, useRef, useEffect } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
-// ── Constants ───────────────────────────────────────────────────────────
-
-const W = 800;
-const H = 600;
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
-
-// ── Emoji map ───────────────────────────────────────────────────────────
-
-const EMOJI: Record<string, string> = {
-  tree: "🌳", rock: "🪨", water: "🌊", flower: "🌻", house: "🏡",
-  creature: "🐾", player: "🧑‍🌾", ai: "🤖",
-};
-
-// ── Tools ───────────────────────────────────────────────────────────────
+// ── Tools ────────────────────────────────────────────────────────────────────
 
 const tools = [
-  defineTool({
-    name: "sandbox.say",
-    description: "Say something in the world. Everyone sees it.",
-    input_schema: z.object({ text: z.string().min(1).max(500) }),
-    handler: (ctx, input) => {
-      const state = ctx.state as any;
-      const msg = { id: uid(), actor: ctx.actorId, text: input.text, ts: ctx.timestamp };
-      ctx.setState({ ...state, messages: [...(state.messages || []), msg].slice(-50) });
-      return { said: input.text };
-    },
-  }),
+  ...sceneTools(z),           // scene.add, scene.update, scene.remove, scene.set, scene.batch
+  ...ruleTools(z),            // _rules.set, _rules.remove, _rules.world
+  ...createChatTools(z),      // _chat.send, _chat.clear
+  ...createBugReportTools(z), // _bug.report
 
+  // ── Room spawning ──────────────────────────────────────────
   defineTool({
-    name: "sandbox.move",
-    description: "Move your entity to a position in the world.",
-    input_schema: z.object({ x: z.number().min(0).max(W), y: z.number().min(0).max(H) }),
-    handler: (ctx, input) => {
-      const state = ctx.state as any;
-      const target = { x: input.x, y: input.y };
-      const entities = [...(state.entities || [])];
-      const idx = entities.findIndex((e: any) => e.id === ctx.actorId);
-      if (idx >= 0) {
-        entities[idx] = { ...entities[idx], target };
-      } else {
-        entities.push({
-          id: ctx.actorId,
-          type: ctx.actorId.includes("-ai-") ? "ai" : "player",
-          pos: target,
-          target,
-          label: ctx.actorId.split("-")[0],
-        });
-      }
-      ctx.setState({ ...state, entities });
-      return { moved: target };
-    },
-  }),
+    name: "room.spawn",
+    description: `Spawn a new room — a separate view with its own scene, rules, and state.
 
-  defineTool({
-    name: "sandbox.spawn",
-    description: "Place a new entity in the world.",
+Each room runs its own sandbox instance. Returns { roomId, url }.
+
+After spawning, create a portal entity in the scene so the player can travel there:
+  scene.add({ type: "group", name: "cave-door", interactive: true,
+    data: { entityType: "portal", targetRoom: "<roomId>", roomName: "Crystal Cave" },
+    transform: { x: 400, y: 500 }, children: [ /* door visuals */ ] })
+
+The player clicks the portal node to navigate.`,
     input_schema: z.object({
-      type: z.string().min(1),
-      x: z.number().min(0).max(W),
-      y: z.number().min(0).max(H),
-      label: z.string().optional(),
+      name: z.string().optional().describe("Room ID (auto-generated if omitted)"),
+      initialState: z.record(z.any()).optional().describe("Initial shared state for the new room"),
+      linkBack: z.boolean().optional().describe("Store parent roomId in child (default true)"),
     }),
-    handler: (ctx, input) => {
-      const state = ctx.state as any;
-      const entity = { id: uid(), type: input.type, pos: { x: input.x, y: input.y }, label: input.label };
-      ctx.setState({ ...state, entities: [...(state.entities || []), entity] });
-      return { spawned: entity.id, type: input.type };
+    risk: "medium" as const,
+    capabilities_required: ["room.spawn"],
+    handler: async (ctx: any, input: { name?: string; initialState?: Record<string, any>; linkBack?: boolean }) => {
+      if (!ctx.spawnRoom) throw new Error("Room spawning not available");
+      const result = await ctx.spawnRoom({
+        experienceId: "the-sandbox",
+        name: input.name,
+        initialState: input.initialState,
+        linkBack: input.linkBack ?? true,
+      });
+
+      // Track spawned rooms so Canvas can resolve portal targetRoom → roomId
+      const rooms = { ...(ctx.state._rooms || {}) };
+      rooms[input.name || result.roomId] = { roomId: result.roomId, url: result.url };
+      ctx.setState({ ...ctx.state, _rooms: rooms });
+
+      return { roomId: result.roomId, url: result.url };
     },
   }),
-
-  ...createChatTools(z),
-  ...createBugReportTools(z),
 ];
 
-// ── Grass background ────────────────────────────────────────────────────
+// ── System Prompt ────────────────────────────────────────────────────────────
 
-function GrassBackground() {
-  return (
-    <svg width={W} height={H} style={{ position: "absolute", top: 0, left: 0 }}>
-      <defs>
-        <pattern id="grass" patternUnits="userSpaceOnUse" width="40" height="40">
-          <rect width="40" height="40" fill="#4a7c3f" />
-          <rect x="0" y="0" width="20" height="20" fill="#4f8544" opacity="0.5" />
-          <rect x="20" y="20" width="20" height="20" fill="#4f8544" opacity="0.5" />
-        </pattern>
-      </defs>
-      <rect width={W} height={H} fill="url(#grass)" />
-    </svg>
+const SYSTEM_PROMPT = `You are the Worldbuilder — a creative AI that builds living visual worlds.
+
+## Scene Tools (what things look like)
+Create SVG graphics: rectangles, circles, paths, text, images, groups, particles.
+- scene.add — add a visual node
+- scene.update — move, restyle, animate, resize any node
+- scene.remove — delete nodes
+- scene.set — background color, camera, gradients, dimensions
+- scene.batch — multiple operations in one call (most efficient)
+
+## Visual Craft (how to make things look GOOD)
+
+Never use bare primitives for natural/organic entities. A fish is NOT an ellipse. A tree is NOT a rectangle. Follow these rules:
+
+1. **Use \`path\` nodes with cubic bezier curves** (\`C\` commands) for any organic shape — bodies, fins, leaves, clouds, terrain. Curves look alive; straight edges look like programmer art.
+2. **Always define gradients** via \`scene.set\` and reference them with \`fill: "url(#id)"\`. Flat single-color fills look cheap. Every natural object needs at least a two-stop gradient for depth.
+3. **Compose entities as \`group\` nodes with 3-5 layered children.** A fish = body path + tail path + fin path + eye circle + translucent highlight. More layers = more visual richness.
+4. **Use opacity for depth and atmosphere.** Background elements at 0.3-0.6 opacity. Highlights and sheens at 0.2-0.4. This creates visual depth without extra work.
+5. **Add subtle idle animations.** A gentle \`transform.y\` oscillation (yoyo, repeat: -1) makes entities feel alive. Pulsing \`style.opacity\` on glowing objects adds atmosphere.
+6. **Use strokes intentionally.** Thin strokes (0.5-1.5px) in a darker shade of the fill color add definition. Skip strokes on highlights and atmospheric effects.
+
+### Quality Example — a well-crafted fish entity:
+\`\`\`
+scene.batch({ operations: [
+  { op: "set", gradient: { type: "linear", id: "fish-teal", x1: 0, y1: 0, x2: 0, y2: 1,
+    stops: [{ offset: 0, color: "#22d3ee" }, { offset: 0.6, color: "#0891b2" }, { offset: 1, color: "#164e63" }] } },
+  { op: "add", node: { type: "group", name: "teal-fish", transform: { x: 300, y: 200 },
+    data: { entityType: "fish", tags: ["aquatic", "alive"] },
+    children: [
+      { type: "path", d: "M 0 0 C 8 -18 30 -22 50 -12 C 60 -6 60 6 50 12 C 30 22 8 18 0 0 Z",
+        style: { fill: "url(#fish-teal)", stroke: "#0e7490", strokeWidth: 0.8 } },
+      { type: "path", d: "M -2 0 C -8 -12 -20 -16 -16 -2 L -2 0 L -16 2 C -20 16 -8 12 -2 0 Z",
+        style: { fill: "#06b6d4", opacity: 0.85 } },
+      { type: "path", d: "M 20 -12 C 25 -24 38 -26 42 -14",
+        style: { fill: "none", stroke: "#22d3ee", strokeWidth: 1.5, opacity: 0.6 } },
+      { type: "circle", radius: 3, transform: { x: 40, y: -3 },
+        style: { fill: "#0f172a" } },
+      { type: "circle", radius: 1, transform: { x: 41, y: -4 },
+        style: { fill: "#fff", opacity: 0.9 } },
+      { type: "path", d: "M 12 -6 C 20 -14 36 -14 48 -8",
+        style: { fill: "none", stroke: "rgba(255,255,255,0.2)", strokeWidth: 2.5 } }
+    ] } }
+] })
+\`\`\`
+
+### Reusable SVG path shapes (adapt scale/curves as needed):
+- **Fish body:** \`M 0 0 C 8 -18 30 -22 50 -12 C 60 -6 60 6 50 12 C 30 22 8 18 0 0 Z\`
+- **Forked tail:** \`M 0 0 C -8 -12 -20 -16 -16 -2 L 0 0 L -16 2 C -20 16 -8 12 0 0 Z\`
+- **Leaf/petal:** \`M 0 0 C 5 -12 20 -18 35 -10 C 40 -4 38 6 30 12 C 18 18 5 12 0 0 Z\`
+- **Cloud puff:** \`M 10 20 A 15 15 0 1 1 30 5 A 12 12 0 1 1 55 3 A 18 18 0 1 1 80 10 Q 82 22 70 22 L 15 22 Q 5 22 10 20 Z\`
+- **Rounded hilltop:** \`M 0 40 Q 30 -5 60 10 Q 90 25 120 5 Q 150 -10 180 40 Z\`
+- **Branch/tendril:** \`M 0 0 C 4 -15 -3 -30 2 -50 C 5 -55 10 -52 8 -45 C 5 -30 12 -15 5 0 Z\`
+
+### Before creating ANY entity, check:
+- [ ] Main shape uses \`path\` with \`C\` curves (not bare rect/ellipse/circle)
+- [ ] At least one gradient defined and used as fill
+- [ ] Entity is a \`group\` with 3+ children
+- [ ] At least one child has reduced opacity for depth/highlight
+- [ ] Consider a subtle idle tween (breathing, bobbing, pulsing)
+
+## Rule Tools (how things behave)
+Create declarative rules that run client-side at ~10 ticks/sec:
+- _rules.set — create/update a rule
+- _rules.remove — delete a rule
+- _rules.world — name the world, pause/resume, change tick speed
+
+## Room Tools (multiple views)
+- room.spawn — create a new room (returns { roomId, url })
+
+Each room is a separate world with its own scene, rules, and state. Use rooms
+for: overworld + dungeons, lobby + arenas, different biomes, etc.
+
+### Portal Entities
+To let the player travel between rooms, create **portal scene nodes**:
+1. Spawn the room: room.spawn({ name: "cave-1" })
+2. Add a portal entity to the scene:
+   scene.add({ type: "group", name: "cave-door", interactive: true,
+     data: { entityType: "portal", targetRoom: "cave-1", roomName: "Crystal Cave" },
+     transform: { x: 400, y: 500 },
+     children: [
+       { type: "rect", width: 60, height: 80, style: { fill: "#2a1a3a", stroke: "#8b5cf6", strokeWidth: 2 } },
+       { type: "text", text: "Crystal Cave", transform: { y: -10 },
+         style: { fill: "#c4b5fd", fontSize: 11, textAnchor: "middle" } }
+     ]
+   })
+
+The player clicks the portal node to navigate. Portals can be ANY visual —
+doors, gates, glowing orbs, signs, ladders. Make them interactive: true.
+
+The parent room ID is stored in child state as _parentRoom. Create a
+"go back" portal in child rooms pointing to the parent.
+
+## Entity Convention
+When creating nodes that rules should target, include:
+  data: { entityType: "fish", tags: ["aquatic", "alive"] }
+
+Rules target entities via selectors:
+  "entityType:fish" — all fish
+  "tag:alive" — anything alive
+  "name:hero" — specific named node
+  "*" — all entities
+
+## Rule Effects
+Rules can: move things (transform), restyle them (style), update data (data),
+count things (counter), spawn new entities (spawn), remove entities (remove),
+or start animations (tween). Add variance for organic randomness.
+
+## Your Approach
+1. Start by creating a scene — background, initial entities
+2. Add rules to bring entities to life
+3. Name the world with _rules.world
+4. Observe what emerges
+5. Evolve — add new entities, modify rules, introduce new dynamics
+6. Spawn rooms for different areas — create portal entities as doors/gates
+7. Respond to the human's requests and ideas
+
+## Important
+- Use scene.batch for efficiency when creating multiple things
+- Always give entities an entityType in their data
+- Portal nodes must have interactive: true and data.entityType: "portal"
+- Use variance (0-1) in rule effects for organic, non-uniform movement
+- Use probability (0-1) in conditions for stochastic behavior
+- Use cooldownMs in conditions to rate-limit effects
+- The human can see everything you create in real-time`;
+
+// ── WorldHUD ─────────────────────────────────────────────────────────────────
+
+function WorldHUD({
+  worldMeta,
+  ruleCount,
+  stats,
+}: {
+  worldMeta: { name: string; description: string; paused: boolean; tickSpeed: number };
+  ruleCount: number;
+  stats: { rulesEvaluated: number; rulesFired: number; nodesAffected: number; ticksElapsed: number };
+}) {
+  if (!worldMeta.name && !worldMeta.description && ruleCount === 0) return null;
+
+  return React.createElement("div", {
+    style: {
+      position: "absolute",
+      top: 12,
+      left: 12,
+      padding: "10px 14px",
+      background: "rgba(10, 10, 10, 0.7)",
+      backdropFilter: "blur(12px)",
+      WebkitBackdropFilter: "blur(12px)",
+      borderRadius: 10,
+      border: "1px solid rgba(255, 255, 255, 0.08)",
+      color: "#e2e2e8",
+      fontSize: 12,
+      fontFamily: "system-ui, -apple-system, sans-serif",
+      lineHeight: 1.5,
+      maxWidth: 260,
+      pointerEvents: "none",
+      zIndex: 100,
+    },
+  },
+    worldMeta.name ? React.createElement("div", {
+      style: { fontWeight: 700, fontSize: 14, color: "#fff", marginBottom: 2 },
+    }, worldMeta.name) : null,
+    worldMeta.description ? React.createElement("div", {
+      style: { color: "#94a3b8", fontSize: 11, marginBottom: 6 },
+    }, worldMeta.description) : null,
+    React.createElement("div", {
+      style: { display: "flex", gap: 12, color: "#6b6b80", fontSize: 10, fontVariantNumeric: "tabular-nums" },
+    },
+      React.createElement("span", null, `${ruleCount} rules`),
+      React.createElement("span", null, `tick ${stats.ticksElapsed}`),
+      stats.rulesFired > 0 ? React.createElement("span", null, `${stats.nodesAffected} affected`) : null,
+    ),
+    worldMeta.paused ? React.createElement("div", {
+      style: {
+        marginTop: 6,
+        padding: "2px 8px",
+        background: "rgba(239, 68, 68, 0.2)",
+        color: "#f87171",
+        borderRadius: 4,
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        display: "inline-block",
+      },
+    }, "Paused") : null,
   );
 }
 
-// ── Entity rendering ────────────────────────────────────────────────────
-
-function EntityNode({ entity, pos }: { entity: any; pos: { x: number; y: number } }) {
-  const isPlayer = entity.type === "player" || entity.type === "ai";
-  const size = isPlayer ? 32 : entity.type === "tree" ? 36 : entity.type === "house" ? 38 : 24;
-  const emoji = EMOJI[entity.type] || "❓";
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: pos.x - size / 2,
-        top: pos.y - size / 2,
-        width: size,
-        height: size,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: size * 0.85,
-        zIndex: isPlayer ? 20 : Math.round(pos.y),
-        filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.3))",
-      }}
-      title={entity.label || entity.type}
-    >
-      <span style={{ lineHeight: 1 }}>{emoji}</span>
-      {entity.label && (
-        <div style={{
-          position: "absolute", top: -16, whiteSpace: "nowrap",
-          fontSize: 10, fontWeight: 600, textAlign: "center",
-          color: isPlayer ? "#fff" : "#c8dfc0",
-          textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-        }}>
-          {entity.label}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Animated positions hook ─────────────────────────────────────────────
-
-function useAnimatedPositions(entities: any[]) {
-  const posRef = useRef<Record<string, { x: number; y: number }>>({});
-  const [display, setDisplay] = useState<Record<string, { x: number; y: number }>>({});
-  const rafRef = useRef(0);
-  const lastRef = useRef(0);
-
-  useEffect(() => {
-    for (const e of entities) {
-      if (!posRef.current[e.id]) posRef.current[e.id] = { ...e.pos };
-    }
-    const ids = new Set(entities.map((e: any) => e.id));
-    for (const id of Object.keys(posRef.current)) {
-      if (!ids.has(id)) delete posRef.current[id];
-    }
-  }, [entities]);
-
-  useEffect(() => {
-    function tick(now: number) {
-      if (!lastRef.current) lastRef.current = now;
-      const dt = Math.min((now - lastRef.current) / 1000, 0.1);
-      lastRef.current = now;
-      let moved = false;
-      for (const e of entities) {
-        const target = e.target || e.pos;
-        const cur = posRef.current[e.id] || { ...e.pos };
-        const dx = target.x - cur.x, dy = target.y - cur.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 1) {
-          const step = Math.min(120 * dt, dist);
-          cur.x += (dx / dist) * step;
-          cur.y += (dy / dist) * step;
-          posRef.current[e.id] = cur;
-          moved = true;
-        } else if (dist > 0) {
-          posRef.current[e.id] = { ...target };
-          moved = true;
-        }
-      }
-      if (moved) setDisplay({ ...posRef.current });
-      rafRef.current = requestAnimationFrame(tick);
-    }
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [entities]);
-
-  return display;
-}
-
-// ── Canvas ──────────────────────────────────────────────────────────────
+// ── Canvas ────────────────────────────────────────────────────────────────────
 
 function Canvas(props: any) {
-  const { sharedState, callTool, actorId, ephemeralState, setEphemeral, participants } = props;
-  const state = sharedState || { entities: [], messages: [] };
-  const entities = state.entities || [];
-  const messages = state.messages || [];
-  const display = useAnimatedPositions(entities);
-  const [chatInput, setChatInput] = useState("");
-  const chatRef = useRef<HTMLDivElement>(null);
+  const {
+    sharedState,
+    callTool,
+    actorId,
+    participants,
+    ephemeralState,
+    setEphemeral,
+  } = props;
 
-  useEffect(() => {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-  }, [messages.length]);
+  // Scene graph
+  const scene = sharedState._scene ?? createScene({ width: 800, height: 600, background: "#0a0a0a" });
 
-  const handleWorldClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    callTool("sandbox.move", { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) });
+  // Rules
+  const rules = sharedState._rules ?? [];
+  const worldMeta = sharedState._worldMeta ?? {
+    name: "",
+    description: "",
+    paused: false,
+    tickSpeed: 100,
   };
 
-  const handleSay = () => {
-    if (!chatInput.trim()) return;
-    callTool("sandbox.say", { text: chatInput.trim() });
-    setChatInput("");
-  };
+  // Spawned rooms registry
+  const rooms = sharedState._rooms ?? {};
+  const parentRoom = sharedState._parentRoom;
 
-  const sorted = [...entities].sort((a, b) => {
-    return ((display[a.id] || a.pos).y) - ((display[b.id] || b.pos).y);
-  });
+  // Pipeline: scene → tweens → particles → rules
+  const tweened = useSceneTweens(scene);
+  const particled = useParticleTick(tweened);
+  const { simulatedScene, stats } = useRuleTick(particled, rules, worldMeta, callTool);
 
-  return (
-    <div style={{ display: "flex", height: "100vh", background: "#1a120a", color: "#e5dcc8", fontFamily: "system-ui, -apple-system, sans-serif" }}>
-      {/* World */}
-      <div
-        onClick={handleWorldClick}
-        style={{
-          position: "relative", width: W, height: H, margin: 16,
-          borderRadius: 12, overflow: "hidden", cursor: "crosshair", flexShrink: 0,
-          border: "3px solid #5a4020", boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
-        }}
-      >
-        <GrassBackground />
-        {sorted.map((e) => (
-          <EntityNode key={e.id} entity={e} pos={display[e.id] || e.pos} />
-        ))}
-        {entities.length === 0 && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 16, color: "#8a7a5a", pointerEvents: "none", fontWeight: 600,
-          }}>
-            Click anywhere to enter the world
-          </div>
-        )}
-      </div>
+  // Interaction hooks
+  const interaction = useSceneInteraction();
+  const drag = useSceneDrag(callTool);
 
-      {/* Chat panel */}
-      <div style={{
-        flex: 1, display: "flex", flexDirection: "column", margin: "16px 16px 16px 0", minWidth: 0,
-        background: "linear-gradient(180deg, #2a1a0a 0%, #1f140a 100%)", borderRadius: 12,
-        border: "2px solid #5a4020", padding: 16,
-      }}>
-        <h2 style={{ margin: "0 0 12px 0", fontSize: 17, fontWeight: 800, color: "#d4a44a", letterSpacing: 1, borderBottom: "1px solid #3a2a10", paddingBottom: 10 }}>
-          The Sandbox
-        </h2>
-        <div ref={chatRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2, paddingRight: 8 }}>
-          {messages.map((msg: any) => (
-            <div key={msg.id} style={{ fontSize: 13, lineHeight: 1.5, padding: "5px 0", borderBottom: "1px solid #2a1a0a" }}>
-              <span style={{
-                fontWeight: 700, marginRight: 6,
-                color: msg.actor === "system" ? "#8a7a5a" : msg.actor.includes("-ai-") ? "#c084fc" : "#60a5fa",
-              }}>
-                {msg.actor === "system" ? "system" : msg.actor.includes("-ai-") ? "🤖 ai" : `🧑‍🌾 ${msg.actor.split("-")[0]}`}:
-              </span>
-              <span style={{ color: "#d4c4a0" }}>{msg.text}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <input
-            type="text" value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSay()}
-            placeholder="Say something..."
-            style={{
-              flex: 1, padding: "10px 14px", fontSize: 13, background: "#1a0f05",
-              border: "2px solid #5a4020", borderRadius: 8, color: "#e5dcc8", outline: "none",
-            }}
-          />
-          <button onClick={handleSay} style={{
-            padding: "10px 18px", fontSize: 13, fontWeight: 700, background: "#b45309",
-            color: "#fff", border: "2px solid #d97706", borderRadius: 8, cursor: "pointer",
-          }}>
-            Say
-          </button>
-        </div>
-      </div>
+  // Portal navigation — when a portal node is clicked, navigate to its room
+  const handleNodeClick = useCallback((nodeId: string, event: { x: number; y: number }) => {
+    // Find the clicked node in the scene
+    const node = nodeById(simulatedScene, nodeId);
+    if (node?.data?.entityType === "portal") {
+      const targetRoom = node.data.targetRoom;
+      if (!targetRoom) return;
 
-      {/* Standardized UI */}
-      <ChatPanel
-        sharedState={sharedState}
-        callTool={callTool}
-        actorId={actorId}
-        ephemeralState={ephemeralState || {}}
-        setEphemeral={setEphemeral || (() => {})}
-        participants={participants || []}
-      />
-      <ReportBug callTool={callTool} actorId={actorId} />
-    </div>
+      // Resolve URL: check _rooms registry, or build from targetRoom name
+      const roomEntry = rooms[targetRoom];
+      const url = roomEntry?.url || `?room=${targetRoom}`;
+      window.location.href = url;
+      return;
+    }
+
+    // Pass through to interaction hook for non-portal clicks
+    interaction.onNodeClick(nodeId, event);
+  }, [simulatedScene, rooms, interaction.onNodeClick]);
+
+  return React.createElement("div", {
+    style: {
+      width: "100vw",
+      height: "100vh",
+      background: "#0a0a0a",
+      position: "relative",
+      overflow: "hidden",
+    },
+  },
+    // Scene renderer
+    React.createElement(SceneRenderer, {
+      scene: simulatedScene,
+      width: scene.width ?? 800,
+      height: scene.height ?? 600,
+      style: {
+        width: "100%",
+        height: "100%",
+      },
+      onNodeClick: handleNodeClick,
+      onNodeHover: interaction.onNodeHover,
+      onNodeDragStart: drag.onNodeDragStart,
+      onNodeDrag: drag.onNodeDrag,
+      onNodeDragEnd: drag.onNodeDragEnd,
+    }),
+
+    // World HUD
+    React.createElement(WorldHUD, {
+      worldMeta,
+      ruleCount: rules.length,
+      stats,
+    }),
+
+    // Chat
+    React.createElement(ChatPanel, {
+      sharedState,
+      callTool,
+      actorId,
+      ephemeralState,
+      setEphemeral,
+      participants,
+    }),
+
+    // Bug report
+    React.createElement(ReportBug, {
+      callTool,
+      actorId,
+    }),
   );
 }
 
-// ── Experience ──────────────────────────────────────────────────────────
+// ── Hints ────────────────────────────────────────────────────────────────────
+
+const hints = [
+  ...createChatHints(),
+  ...createBugReportHints(),
+  {
+    trigger: "Scene is empty and a participant joined",
+    condition: `(state._scene?.root?.children?.length ?? 0) === 0`,
+    suggestedTools: ["scene.batch", "_rules.world"],
+    priority: "high" as const,
+    cooldownMs: 15000,
+  },
+  {
+    trigger: "Entities exist but no rules defined",
+    condition: `(state._scene?.root?.children?.length ?? 0) > 0 && (state._rules || []).length === 0`,
+    suggestedTools: ["_rules.set"],
+    priority: "medium" as const,
+    cooldownMs: 20000,
+  },
+  {
+    trigger: "Scene has entities but no gradients — define gradients for visual richness",
+    condition: `(state._scene?.root?.children?.length ?? 0) > 3 && (state._scene?.gradients?.length ?? 0) === 0`,
+    suggestedTools: ["scene.set"],
+    priority: "medium" as const,
+    cooldownMs: 30000,
+  },
+];
+
+// ── Initial State ────────────────────────────────────────────────────────────
+
+const initialState = {
+  _scene: createScene({ width: 800, height: 600, background: "#0a0a0a" }),
+  _rules: [] as any[],
+  _worldMeta: {
+    name: "The Sandbox",
+    description: "",
+    paused: false,
+    tickSpeed: 100,
+  },
+  _rooms: {} as Record<string, { roomId: string; url: string }>,
+  _chat: [] as any[],
+  _bugReports: [] as any[],
+};
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+const tests = [
+  defineTest({
+    name: "_rules.set creates a rule",
+    run: async ({ tool, ctx, expect }) => {
+      const rulesSet = tool("_rules.set");
+      const context = ctx({ state: { _rules: [] } });
+      await rulesSet.handler(context, {
+        id: "test-rule",
+        name: "Test Rule",
+        description: "A test rule",
+        enabled: true,
+        trigger: "tick",
+        condition: { selector: "entityType:test" },
+        effect: { type: "transform", dx: 1 },
+      });
+      expect(context.state._rules).toBeTruthy();
+      expect(context.state._rules.length).toBe(1);
+      expect(context.state._rules[0].id).toBe("test-rule");
+      expect(context.state._rules[0].name).toBe("Test Rule");
+      expect(context.state._rules[0].enabled).toBe(true);
+    },
+  }),
+  defineTest({
+    name: "_rules.remove deletes a rule",
+    run: async ({ tool, ctx, expect }) => {
+      const rulesSet = tool("_rules.set");
+      const rulesRemove = tool("_rules.remove");
+      const context = ctx({ state: { _rules: [] } });
+
+      await rulesSet.handler(context, {
+        id: "temp-rule",
+        name: "Temp",
+        condition: { selector: "*" },
+        effect: { type: "transform", dx: 1 },
+      });
+      expect(context.state._rules.length).toBe(1);
+
+      await rulesRemove.handler(context, { id: "temp-rule" });
+      expect(context.state._rules.length).toBe(0);
+    },
+  }),
+  defineTest({
+    name: "room.spawn tracks spawned rooms",
+    run: async ({ tool, ctx, expect }) => {
+      const spawn = tool("room.spawn");
+      const context = ctx({ state: { _rooms: {} } });
+      // Manually wire spawnRoom mock (test framework ctx doesn't include it)
+      (context as any).spawnRoom = async (opts: any) => ({
+        roomId: opts.name || "auto-id",
+        url: `?room=${opts.name || "auto-id"}`,
+      });
+      await spawn.handler(context, { name: "test-room" });
+      expect(context.state._rooms["test-room"]).toBeTruthy();
+      expect(context.state._rooms["test-room"].roomId).toBe("test-room");
+      expect(context.state._rooms["test-room"].url).toBe("?room=test-room");
+    },
+  }),
+  defineTest({
+    name: "_rules.world sets metadata",
+    run: async ({ tool, ctx, expect }) => {
+      const world = tool("_rules.world");
+      const context = ctx({ state: {} });
+      await world.handler(context, {
+        name: "Test World",
+        description: "A test",
+        paused: true,
+        tickSpeed: 50,
+      });
+      expect(context.state._worldMeta.name).toBe("Test World");
+      expect(context.state._worldMeta.description).toBe("A test");
+      expect(context.state._worldMeta.paused).toBe(true);
+      expect(context.state._worldMeta.tickSpeed).toBe(50);
+    },
+  }),
+];
+
+// ── Experience Definition ────────────────────────────────────────────────────
 
 export default defineExperience({
+  name: "The Sandbox",
   manifest: {
     id: "the-sandbox",
     title: "The Sandbox",
-    description: "A 2D world where human and AI build together in real-time.",
-    version: "0.1.0",
-    requested_capabilities: [],
-    category: "creative",
-    tags: ["sandbox", "creative", "2d", "worldbuilding"],
-    agentSlots: [
-      {
-        role: "builder",
-        systemPrompt: `You are a builder in a shared 2D sandbox world. You and the human both exist as entities in this world. You can see the world state and chat messages via watch.
-
-When the human asks you to build something:
-1. Use sandbox.say to acknowledge what you're building
-2. Use sandbox.spawn to place new entities (tree, rock, water, flower, house, creature)
-3. Use sandbox.move to move yourself around the world
-
-The world is ${W}x${H} pixels. Position entities within these bounds.
-You can also use _chat.send to reply in the collapsible chat panel.`,
-        allowedTools: ["sandbox.say", "sandbox.move", "sandbox.spawn", "_chat.send"],
-        autoSpawn: true,
-        maxInstances: 1,
-      },
-    ],
+    description: "A blank canvas where AI builds living visual worlds",
+    version: "2.0.0",
+    requested_capabilities: ["state.write", "room.spawn"],
   },
-  Canvas,
   tools,
-  agentHints: [...createChatHints(), ...createBugReportHints()],
-  initialState: {
-    entities: [],
-    messages: [
-      { id: "welcome", actor: "system", text: "Welcome to The Sandbox. Click the world to enter, then tell the AI what to build.", ts: Date.now() },
-    ],
-  },
-  tests: [
-    defineTest({
-      name: "say adds message",
-      run: async ({ tool, ctx: makeCtx, expect }) => {
-        const say = tool("sandbox.say");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await say.handler(c, { text: "hello" });
-        const s = c.getState();
-        expect(s.messages.length).toBe(1);
-        expect(s.messages[0].text).toBe("hello");
-      },
-    }),
-    defineTest({
-      name: "spawn creates entity",
-      run: async ({ tool, ctx: makeCtx, expect }) => {
-        const spawn = tool("sandbox.spawn");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await spawn.handler(c, { type: "tree", x: 100, y: 100 });
-        const s = c.getState();
-        expect(s.entities.length).toBe(1);
-        expect(s.entities[0].type).toBe("tree");
-      },
-    }),
-    defineTest({
-      name: "move creates player entity if missing",
-      run: async ({ tool, ctx: makeCtx, expect }) => {
-        const move = tool("sandbox.move");
-        const c = makeCtx({ state: { entities: [], messages: [] } });
-        await move.handler(c, { x: 50, y: 50 });
-        const s = c.getState();
-        expect(s.entities.length).toBe(1);
-        expect(s.entities[0].pos.x).toBe(50);
-      },
-    }),
+  Canvas,
+  hints,
+  tests,
+  initialState,
+  agents: [
+    {
+      role: "worldbuilder",
+      systemPrompt: SYSTEM_PROMPT,
+      allowedTools: [
+        "scene.add", "scene.update", "scene.remove", "scene.set", "scene.batch",
+        "_rules.set", "_rules.remove", "_rules.world",
+        "room.spawn",
+        "_chat.send",
+      ],
+      autoSpawn: true,
+      maxInstances: 1,
+    },
   ],
 });
