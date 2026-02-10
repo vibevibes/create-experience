@@ -106,6 +106,12 @@ export async function bundleForServer(entryPath: string) {
   let code = result.outputFiles[0].text;
   code = stripExternalImports(code);
 
+  // Strip user-code React hook destructuring (already provided by CJS shims)
+  code = code.replace(
+    /(?:const|let|var)\s+\{[^}]*?\b(?:useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer)\b[^}]*?\}\s*=\s*(?:React|import_react\w*)\s*;/g,
+    "/* [vibevibes] stripped duplicate React destructuring */"
+  );
+
   // Inject CJS shims for esbuild-generated variable references
   // Pass code so we can detect numbered variants (import_react2, etc.)
   code = injectCjsShims(code) + "\n" + code;
@@ -180,14 +186,33 @@ export async function bundleForClient(entryPath: string): Promise<string> {
   let code = result.outputFiles[0].text;
   code = stripExternalImports(code);
 
+  // Strip user-code React hook destructuring that would collide with injected globals.
+  // Pattern: `const { useState, useEffect, ... } = React;` or `var { useState } = React;`
+  // These are already provided by the injected baseGlobals below, so duplicates cause
+  // "Identifier 'X' has already been declared" at runtime.
+  code = code.replace(
+    /(?:const|let|var)\s+\{[^}]*?\b(?:useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer)\b[^}]*?\}\s*=\s*React\s*;/g,
+    "/* [vibevibes] stripped duplicate React destructuring */"
+  );
+
   // Inject globalThis accessors at the top
   const baseGlobals = `
 const React = globalThis.React;
 const { useState, useEffect, useCallback, useMemo, useRef, useContext, useReducer, createContext, forwardRef, memo, Fragment, createElement } = React;
 // JSX Runtime (used when esbuild generates jsx-runtime imports)
-const jsx = createElement;
-const jsxs = createElement;
-const jsxDEV = createElement;
+// Automatic runtime: jsx(type, {children, ...props}, key) — key is 3rd arg
+// createElement:     createElement(type, props, ...children)  — children are 3rd+ args
+function jsx(type, props, key) {
+  const { children, ...rest } = props || {};
+  if (key !== undefined) rest.key = key;
+  return Array.isArray(children)
+    ? createElement(type, rest, ...children)
+    : children !== undefined
+      ? createElement(type, rest, children)
+      : createElement(type, rest);
+}
+function jsxs(type, props, key) { return jsx(type, props, key); }
+function jsxDEV(type, props, key) { return jsx(type, props, key); }
 const Y = globalThis.Y || {};
 const z = globalThis.z;
 const defineExperience = globalThis.defineExperience || ((m) => m);
@@ -237,10 +262,10 @@ const undoTool = globalThis.undoTool || (() => ({}));
 }
 
 /**
- * Build both bundles from the project's src/index.tsx.
+ * Build both bundles from an entry file. Defaults to src/index.tsx.
  */
-export async function buildExperience() {
-  const entryPath = path.join(PROJECT_ROOT, "src", "index.tsx");
+export async function buildExperience(entry?: string) {
+  const entryPath = entry || path.join(PROJECT_ROOT, "src", "index.tsx");
   const [serverCode, clientCode] = await Promise.all([
     bundleForServer(entryPath),
     bundleForClient(entryPath),

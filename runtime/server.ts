@@ -16,7 +16,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { ZodError } from "zod";
 import { EventEmitter } from "events";
-import { buildExperience, bundleForServer, bundleForClient, evalServerBundle } from "./bundler.js";
+import { bundleForServer, bundleForClient, evalServerBundle } from "./bundler.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 // ── Error formatting ──────────────────────────────────────────
@@ -273,16 +273,40 @@ function resolveRoomConfig(
   return resolved;
 }
 
+/**
+ * Resolve the initial state for a room from its experience module.
+ * Checks for `initialState` (function or object) on the module.
+ * Falls back to empty object if not defined.
+ */
+function resolveInitialState(
+  experienceModule: any,
+  config: Record<string, any>,
+): Record<string, any> {
+  const init = experienceModule?.initialState;
+  if (typeof init === "function") {
+    try { return init(config) || {}; } catch { return {}; }
+  }
+  if (init && typeof init === "object") {
+    return { ...init };
+  }
+  return {};
+}
+
 // ── Registry: discover external experiences ────────────────
+
+interface Registry {
+  host: string | null;
+  entries: Map<string, string>;
+}
 
 /**
  * Read vibevibes.registry.json from the project root.
- * Returns a map of experienceId → absolute entry path.
+ * Returns host experience ID + map of experienceId → absolute entry path.
  * Called on-demand (not cached — file can change between calls).
  */
-function loadRegistry(): Map<string, string> {
+function loadRegistry(): Registry {
   const registryPath = path.join(PROJECT_ROOT, "vibevibes.registry.json");
-  if (!fs.existsSync(registryPath)) return new Map();
+  if (!fs.existsSync(registryPath)) return { host: null, entries: new Map() };
 
   try {
     const raw = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
@@ -299,10 +323,10 @@ function loadRegistry(): Map<string, string> {
         }
       }
     }
-    return entries;
+    return { host: raw.host || null, entries };
   } catch (err: any) {
     console.warn(`  Registry: failed to parse vibevibes.registry.json: ${err.message}`);
-    return new Map();
+    return { host: null, entries: new Map() };
   }
 }
 
@@ -347,9 +371,9 @@ async function loadExperienceById(experienceId: string): Promise<LoadedExperienc
 
   // Look up in registry
   const registry = loadRegistry();
-  const entryPath = registry.get(experienceId);
+  const entryPath = registry.entries.get(experienceId);
   if (!entryPath) {
-    const available = [hostExperienceId, ...registry.keys()].filter(Boolean);
+    const available = [hostExperienceId, ...registry.entries.keys()].filter(Boolean);
     throw new Error(
       `Experience '${experienceId}' not found. Available: ${available.join(", ") || "(none)"}. ` +
       `Add it to vibevibes.registry.json.`
@@ -369,53 +393,21 @@ async function loadExperienceById(experienceId: string): Promise<LoadedExperienc
 }
 
 /**
- * Load the host experience from src/index.tsx (startup + hot reload).
+ * Load the host experience. Checks registry for a "host" field first,
+ * falls back to src/index.tsx for scaffolded projects without a registry.
  */
-async function loadHostExperience(): Promise<LoadedExperience> {
-  const result = await buildExperience();
+async function loadHost(): Promise<LoadedExperience> {
+  const registry = loadRegistry();
 
-  // Eval to extract tools + manifest
-  const sdk = await import("@vibevibes/sdk");
-  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = sdk;
-  const stubReact = { createElement: () => null, Fragment: "Fragment" };
-  const zodModule = await import("zod");
-  const z = zodModule.z ?? zodModule.default ?? zodModule;
-
-  const fn = new Function(
-    "React", "Y", "z",
-    "defineExperience", "defineTool", "defineTest", "undoTool",
-    "defineRoomConfig",
-    "require", "exports", "module", "console",
-    `"use strict";\n${result.serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : undefined;`
-  );
-
-  const fakeModule = { exports: {} as any };
-  const result2 = fn(
-    stubReact, {}, z,
-    defineExperience, defineTool, defineTest, undoTool,
-    defineRoomConfig,
-    () => ({}), fakeModule.exports, fakeModule, console,
-  );
-
-  const mod = result2?.default ?? result2 ?? fakeModule.exports?.default ?? fakeModule.exports;
-
-  if (!mod?.manifest || !mod?.tools) {
-    throw new Error("Experience module missing manifest or tools");
+  let loaded: LoadedExperience;
+  if (registry.host && registry.entries.has(registry.host)) {
+    loaded = await loadExperienceFromPath(registry.entries.get(registry.host)!);
+  } else {
+    // Fallback: src/index.tsx (backwards compat for scaffolded projects)
+    loaded = await loadExperienceFromPath(path.join(PROJECT_ROOT, "src", "index.tsx"));
   }
 
-  const entryPath = path.join(PROJECT_ROOT, "src", "index.tsx");
-  const loaded: LoadedExperience = {
-    module: mod,
-    clientBundle: result.clientCode,
-    serverCode: result.serverCode,
-    loadedAt: Date.now(),
-    sourcePath: entryPath,
-  };
-
-  hostExperienceId = mod.manifest.id;
-  experienceCache.set(hostExperienceId, loaded);
-
-  console.log(`Loaded: ${mod.manifest.title} (${mod.tools.length} tools)`);
+  hostExperienceId = loaded.module.manifest.id;
   return loaded;
 }
 
@@ -440,9 +432,12 @@ async function spawnRoom(
   // Resolve and validate config against the TARGET experience's schema
   const config = resolveRoomConfig(targetExperience.module, opts.config);
 
+  // Resolve initial state: experience default, merged with explicit initialState, plus linkBack
+  const expInitialState = resolveInitialState(targetExperience.module, config);
+  const mergedState = { ...expInitialState, ...(opts.initialState || {}) };
   const initialState = opts.linkBack
-    ? { ...(opts.initialState || {}), _parentRoom: sourceRoomId }
-    : (opts.initialState || {});
+    ? { ...mergedState, _parentRoom: sourceRoomId }
+    : mergedState;
 
   const room = new Room(roomId, opts.experienceId, initialState, config);
   room.parentRoomId = sourceRoomId;
@@ -839,7 +834,7 @@ app.get("/screenshot", (req, res) => {
 
 app.post("/sync", async (_req, res) => {
   try {
-    await loadHostExperience();
+    await loadHost();
     // Broadcast only to rooms running the host experience
     for (const room of rooms.values()) {
       if (room.experienceId === hostExperienceId) {
@@ -941,7 +936,7 @@ app.get("/experiences", (_req, res) => {
   }
 
   // Registry entries
-  for (const [id] of registry) {
+  for (const [id] of registry.entries) {
     if (id === hostExperienceId) continue; // Already listed as host
     const cached = experienceCache.get(id);
     if (cached) {
@@ -1072,23 +1067,48 @@ app.get("/mcp-config", (_req, res) => {
   });
 });
 
+// ── Client bundle smoke test ──────────────────────────────────
+// Fetches the client bundle from the running server and tries to parse it.
+// Catches SyntaxErrors (like duplicate declarations) before the user sees them.
+
+async function smokTestClientBundle(port: number) {
+  try {
+    const res = await fetch(`http://localhost:${port}/bundle`);
+    let bundleCode = await res.text();
+    if (bundleCode) {
+      // The client bundle is ESM — strip export statements so new Function() can parse it.
+      // We only care about catching SyntaxErrors like duplicate declarations, not runtime behavior.
+      bundleCode = bundleCode.replace(/\bexport\s*\{[^}]*\}/g, "");
+      bundleCode = bundleCode.replace(/\bexport\s+default\s+/g, "var __default = ");
+      bundleCode = bundleCode.replace(/\bexport\s+(const|let|var|function|class)\s/g, "$1 ");
+      new Function(bundleCode);
+      console.log(`  Smoke test: client bundle OK`);
+    }
+  } catch (err: any) {
+    console.error(`\n  ⚠ SMOKE TEST FAILED — client bundle has errors:`);
+    console.error(`    ${err.message}`);
+    console.error(`    The viewer will fail to load. Fix the source and save to hot-reload.\n`);
+  }
+}
+
 // ── Start server ───────────────────────────────────────────
 
 export async function startServer() {
-  await loadHostExperience();
+  await loadHost();
 
-  // Create default room (with default config)
+  // Create default room (with default config + initial state from experience)
   const hostExp = getHostExperience();
   const defaultConfig = resolveRoomConfig(hostExp, undefined);
-  const defaultRoom = new Room(DEFAULT_ROOM_ID, hostExperienceId, {}, defaultConfig);
+  const hostInitialState = resolveInitialState(hostExp, defaultConfig);
+  const defaultRoom = new Room(DEFAULT_ROOM_ID, hostExperienceId, hostInitialState, defaultConfig);
   rooms.set(DEFAULT_ROOM_ID, defaultRoom);
 
   // Log registry info
   const registry = loadRegistry();
-  if (registry.size > 0) {
-    console.log(`  Registry: ${registry.size} external experience(s) available`);
-    for (const [id] of registry) {
-      console.log(`    - ${id}`);
+  if (registry.entries.size > 0) {
+    console.log(`  Registry: ${registry.entries.size} experience(s) available`);
+    for (const [id] of registry.entries) {
+      console.log(`    - ${id}${id === registry.host ? " (host)" : ""}`);
     }
   }
 
@@ -1113,7 +1133,27 @@ export async function startServer() {
             return;
           }
 
-          const actorId = assignActorId(username, "human");
+          // Reuse actorId if the viewer sends one back (e.g. on refresh)
+          let actorId: string;
+          if (msg.actorId) {
+            // Check if the old actorId is held by a stale WS (refresh scenario)
+            let staleWs: WebSocket | null = null;
+            for (const [existingWs, existingId] of room.wsConnections.entries()) {
+              if (existingId === msg.actorId && existingWs !== ws) {
+                staleWs = existingWs;
+                break;
+              }
+            }
+            if (staleWs) {
+              // Evict the stale connection
+              room.wsConnections.delete(staleWs);
+              try { staleWs.close(); } catch {}
+            }
+            // Reuse the old actorId
+            actorId = msg.actorId;
+          } else {
+            actorId = assignActorId(username, "human");
+          }
           room.participants.set(actorId, { type: "human", joinedAt: Date.now() });
 
           // Track this WS → actorId in the room
@@ -1215,14 +1255,52 @@ export async function startServer() {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       console.log(`\nFile changed${filename ? ` (${filename})` : ""}, rebuilding...`);
-      try {
-        await loadHostExperience();
-        // Only broadcast to rooms running the host experience
-        for (const room of rooms.values()) {
-          if (room.experienceId === hostExperienceId) {
-            room.broadcastToAll({ type: "experience_updated" });
+
+      // Determine which cached experiences are affected by this file change
+      const changedPath = filename ? path.resolve(PROJECT_ROOT, filename) : null;
+      const affectedIds: string[] = [];
+
+      for (const [id, loaded] of experienceCache) {
+        if (!changedPath) {
+          // No filename — conservatively reload everything
+          affectedIds.push(id);
+        } else {
+          // Check if changed file is in the same directory tree as the experience source
+          const expDir = path.dirname(loaded.sourcePath);
+          if (changedPath.startsWith(expDir)) {
+            affectedIds.push(id);
           }
         }
+      }
+
+      // If nothing matched in cache, it might be a change to the host's source
+      if (affectedIds.length === 0) {
+        affectedIds.push(hostExperienceId);
+      }
+
+      // Evict affected experiences from cache
+      for (const id of affectedIds) {
+        experienceCache.delete(id);
+      }
+
+      try {
+        // Always reload the host (it's needed for the default room)
+        if (affectedIds.includes(hostExperienceId)) {
+          await loadHost();
+          for (const room of rooms.values()) {
+            if (room.experienceId === hostExperienceId) {
+              room.broadcastToAll({ type: "experience_updated" });
+            }
+          }
+          smokTestClientBundle(PORT);
+        }
+
+        // For non-host affected experiences, just evict — they rebuild on next access
+        const nonHost = affectedIds.filter((id) => id !== hostExperienceId);
+        if (nonHost.length > 0) {
+          console.log(`  Cache evicted: ${nonHost.join(", ")} (will rebuild on next access)`);
+        }
+
         console.log("Hot reload complete.");
       } catch (err: any) {
         console.error("Hot reload failed:", err.message);
@@ -1259,10 +1337,13 @@ export async function startServer() {
     }
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`\n  vibe-vibe local runtime`);
     console.log(`  ───────────────────────`);
     console.log(`  Viewer:  http://localhost:${PORT}`);
+
+    // Verify the client bundle can be parsed without errors
+    smokTestClientBundle(PORT);
     if (publicUrl) {
       const shareUrl = getAuthenticatedUrl();
       console.log(``);

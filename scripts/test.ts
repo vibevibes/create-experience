@@ -103,10 +103,24 @@ function createTestHelpers(tools: any[]) {
 
 // ── Main ─────────────────────────────────────────────────────
 
-async function main() {
-  const entryPath = path.join(PROJECT_ROOT, "src", "index.tsx");
+import fs from "fs";
 
-  console.log("Bundling experience...\n");
+function resolveEntry(): string {
+  const registryPath = path.join(PROJECT_ROOT, "vibevibes.registry.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+    if (raw.host && raw.experiences?.[raw.host]?.path) {
+      const resolved = path.resolve(path.dirname(registryPath), raw.experiences[raw.host].path);
+      if (fs.existsSync(resolved)) return resolved;
+    }
+  } catch {}
+  return path.join(PROJECT_ROOT, "src", "index.tsx");
+}
+
+async function main() {
+  const entryPath = resolveEntry();
+
+  console.log(`Bundling ${path.relative(PROJECT_ROOT, entryPath)}...\n`);
   const serverCode = await bundleForServer(entryPath);
   const experience = await evalServerBundle(serverCode);
 

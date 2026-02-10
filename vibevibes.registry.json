@@ -1,0 +1,6 @@
+{
+  "host": "the-sandbox",
+  "experiences": {
+    "the-sandbox": { "path": "./templates/the-sandbox/index.tsx" }
+  }
+}

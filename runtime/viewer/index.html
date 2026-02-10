@@ -595,7 +595,8 @@
 
         ws.onopen = () => {
           reconnectAttempts = 0; // Reset backoff on successful connection
-          ws.send(JSON.stringify({ type: "join", username: "viewer", roomId: ROOM_ID }));
+          const savedActorId = sessionStorage.getItem("vibevibes_actorId");
+          ws.send(JSON.stringify({ type: "join", username: "viewer", roomId: ROOM_ID, actorId: savedActorId }));
         };
 
         ws.onmessage = async (event) => {
@@ -603,6 +604,7 @@
 
           if (msg.type === "joined") {
             actorId = msg.actorId;
+            sessionStorage.setItem("vibevibes_actorId", actorId);
             sharedState = msg.sharedState || {};
             participants = msg.participants || [];
             roomConfig = msg.config || {};
