@@ -483,6 +483,10 @@ app.use((req, res, next) => {
   // GET endpoints remain open — viewers, state polling, bundles, screenshots
   if (req.method === "GET" || req.method === "OPTIONS") { next(); return; }
 
+  // Localhost connections bypass token auth (MCP agents run locally)
+  const host = req.hostname || req.headers.host || "";
+  if (host === "localhost" || host === "127.0.0.1" || host.startsWith("localhost:") || host.startsWith("127.0.0.1:")) { next(); return; }
+
   // All POST (mutation) endpoints require token
   const queryToken = req.query.token as string | undefined;
   const authHeader = req.headers.authorization;

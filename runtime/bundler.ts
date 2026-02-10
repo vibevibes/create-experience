@@ -50,8 +50,8 @@ const CJS_BASE_SHIMS: Record<string, string> = {
   import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
   import_zod: "{ z: z, default: z }",
   import_yjs: "{ default: Y }",
-  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig } }",
-  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig } }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
 };
 
 /**
@@ -145,10 +145,21 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const zodModule = await import("zod");
   const z = zodModule.z ?? zodModule.default ?? zodModule;
 
+  // Stubs for chat/bug-report tools (browser-only, but referenced in CJS shims)
+  const createChatTools = () => [];
+  const createChatHints = () => [];
+  const useChat = noop;
+  const ChatPanel = noop;
+  const createBugReportTools = () => [];
+  const createBugReportHints = () => [];
+  const ReportBug = noop;
+
   const fn = new Function(
     "React", "Y", "z",
     "defineExperience", "defineTool", "defineTest", "undoTool",
     "defineRoomConfig",
+    "createChatTools", "createChatHints", "useChat", "ChatPanel",
+    "createBugReportTools", "createBugReportHints", "ReportBug",
     "require", "exports", "module", "console",
     `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : (typeof module !== 'undefined' ? module.exports : undefined);`
   );
@@ -158,6 +169,8 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
     stubReact, {}, z,
     defineExperience, defineTool, defineTest, undoTool,
     defineRoomConfig,
+    createChatTools, createChatHints, useChat, ChatPanel,
+    createBugReportTools, createBugReportHints, ReportBug,
     () => ({}), fakeModule.exports, fakeModule, console,
   );
 
@@ -220,9 +233,13 @@ const defineTool = globalThis.defineTool || ((c) => ({ risk: "low", capabilities
 const defineTest = globalThis.defineTest || ((c) => c);
 const defineRoomConfig = globalThis.defineRoomConfig || ((c) => c);
 const quickTool = globalThis.quickTool;
-const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle } = globalThis.vibevibesHooks || {};
-const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs } = globalThis.vibevibesComponents || {};
+const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle, useChat } = globalThis.vibevibesHooks || {};
+const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs, ChatPanel, ReportBug } = globalThis.vibevibesComponents || {};
 const undoTool = globalThis.undoTool || (() => ({}));
+const createChatTools = globalThis.createChatTools || (() => []);
+const createChatHints = globalThis.createChatHints || (() => []);
+const createBugReportTools = globalThis.createBugReportTools || (() => []);
+const createBugReportHints = globalThis.createBugReportHints || (() => []);
 `;
 
   // When multiple files import the same external, esbuild ESM creates numbered
@@ -241,6 +258,13 @@ const undoTool = globalThis.undoTool || (() => ({}));
     defineExperience: "defineExperience",
     defineTool: "defineTool",
     defineTest: "defineTest",
+    createChatTools: "createChatTools",
+    createChatHints: "createChatHints",
+    createBugReportTools: "createBugReportTools",
+    createBugReportHints: "createBugReportHints",
+    ChatPanel: "ChatPanel",
+    ReportBug: "ReportBug",
+    useChat: "useChat",
   };
 
   const aliasLines: string[] = [];

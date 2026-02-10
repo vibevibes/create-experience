@@ -296,10 +296,71 @@
       handler: async (ctx, input) => { ctx.setState(input.state); return { restored: true }; },
     });
 
+    // ── Chat tools ────────────────────────────────────────────
+    function _chatUid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+    function _capChat(msgs, max = 200) { return msgs.length > max ? msgs.slice(-max) : msgs; }
+
+    globalThis.createChatTools = (zod) => [
+      {
+        name: "_chat.send",
+        description: "Send a chat message",
+        input_schema: zod.object({ message: zod.string().min(1).max(2000), replyTo: zod.string().optional() }),
+        risk: "low", capabilities_required: ["state.write"],
+        handler: async (ctx, input) => {
+          const messages = _capChat([...(ctx.state._chat || []), { id: _chatUid(), actorId: ctx.actorId, message: input.message, replyTo: input.replyTo, ts: ctx.timestamp }]);
+          ctx.setState({ ...ctx.state, _chat: messages });
+          return { sent: true, messageCount: messages.length };
+        },
+      },
+      {
+        name: "_chat.clear",
+        description: "Clear all chat messages",
+        input_schema: zod.object({}),
+        risk: "medium", capabilities_required: ["state.write"],
+        handler: async (ctx) => { ctx.setState({ ...ctx.state, _chat: [] }); return { cleared: true }; },
+      },
+    ];
+
+    globalThis.createChatHints = () => [
+      { trigger: "A new chat message was sent by a human participant", condition: `(state._chat || []).length > 0 && (state._chat || []).slice(-1)[0]?.actorId?.includes('human')`, suggestedTools: ["_chat.send"], priority: "medium", cooldownMs: 2000 },
+    ];
+
+    // ── Bug report tools ──────────────────────────────────────
+    globalThis.createBugReportTools = (zod) => [
+      {
+        name: "_bug.report",
+        description: "Submit a bug report with optional screenshot and description",
+        input_schema: zod.object({ description: zod.string().max(2000).optional(), screenshot: zod.string().optional(), metadata: zod.record(zod.any()).optional() }),
+        risk: "low", capabilities_required: ["state.write"],
+        handler: async (ctx, input) => {
+          const report = { id: _chatUid(), actorId: ctx.actorId, description: input.description || "", screenshot: input.screenshot, metadata: input.metadata, ts: ctx.timestamp, status: "open" };
+          const reports = [...(ctx.state._bugReports || []), report].slice(-50);
+          ctx.setState({ ...ctx.state, _bugReports: reports });
+          return { reportId: report.id, totalReports: reports.length };
+        },
+      },
+    ];
+
+    globalThis.createBugReportHints = () => [
+      { trigger: "A new bug report was submitted", condition: `(state._bugReports || []).some(r => r.status === 'open')`, suggestedTools: [], priority: "low", cooldownMs: 10000 },
+    ];
+
+    // ── useChat hook ──────────────────────────────────────────
+    function useChat(sharedState, callTool, actorId, ephemeralState, setEphemeral) {
+      const messages = sharedState?._chat || [];
+      const sendMessage = useCallback(async (message, replyTo) => {
+        await callTool("_chat.send", { message, replyTo });
+      }, [callTool]);
+      const clearChat = useCallback(async () => {
+        await callTool("_chat.clear", {});
+      }, [callTool]);
+      return { messages, sendMessage, clearChat, setTyping: () => {}, typingUsers: [] };
+    }
+
     globalThis.vibevibesHooks = {
       useToolCall, useSharedState, useOptimisticTool, useParticipants,
       useAnimationFrame, useFollow, useTypingIndicator,
-      useUndo, useDebounce, useThrottle,
+      useUndo, useDebounce, useThrottle, useChat,
     };
 
     // UI Components (minimal inline versions)
@@ -396,6 +457,142 @@
               style: { padding: "8px 16px", fontSize: "13px", fontWeight: 500, background: "none", border: "none", cursor: "pointer", color: t.id === active ? "#6366f1" : "#94a3b8", borderBottom: t.id === active ? "2px solid #6366f1" : "2px solid transparent", marginBottom: "-1px" } }, t.label))
           ),
           ce("div", { style: { paddingTop: "12px" } }, children)
+        );
+      },
+      // ── ChatPanel ─────────────────────────────────────────
+      ChatPanel: function ChatPanel({ sharedState, callTool, actorId, ephemeralState, setEphemeral, participants, ...props }) {
+        const [open, setOpen] = useState(false);
+        const [inputVal, setInputVal] = useState("");
+        const [sending, setSending] = useState(false);
+        const [lastSeen, setLastSeen] = useState(0);
+        const listRef = useRef(null);
+        const messages = sharedState?._chat || [];
+        const unread = open ? 0 : Math.max(0, messages.length - lastSeen);
+
+        useEffect(() => { if (open) setLastSeen(messages.length); }, [open, messages.length]);
+        useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [messages.length]);
+
+        function _parseActor(id) {
+          const m = id.match(/^(.+)-(human|ai)-(\d+)$/);
+          return m ? { username: m[1], type: m[2] } : { username: id, type: "unknown" };
+        }
+        function _fmtTime(ts) { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+        const colors = { human: "#60a5fa", ai: "#a78bfa", unknown: "#94a3b8" };
+
+        async function handleSend() {
+          const text = inputVal.trim();
+          if (!text || sending) return;
+          setSending(true); setInputVal("");
+          try { await callTool("_chat.send", { message: text }); } catch {} finally { setSending(false); }
+        }
+
+        const toggleBtn = ce("button", { onClick: () => setOpen(!open), title: "Chat",
+          style: { position: "fixed", bottom: "64px", right: "16px", zIndex: 9990, width: "40px", height: "40px", borderRadius: "50%", background: "#1e1e2e", border: "1px solid #334155", color: "#94a3b8", fontSize: "18px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", ...props.style } },
+          ce("svg", { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+            ce("path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" })),
+          unread > 0 ? ce("span", { style: { position: "absolute", top: "-4px", right: "-4px", width: "18px", height: "18px", borderRadius: "50%", background: "#6366f1", color: "#fff", fontSize: "10px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" } }, unread > 9 ? "9+" : String(unread)) : null
+        );
+
+        if (!open) return toggleBtn;
+
+        return ce("div", null,
+          toggleBtn,
+          ce("div", { style: { position: "fixed", bottom: "112px", right: "16px", zIndex: 9990, width: "320px", maxHeight: "500px", borderRadius: "12px", background: "#111113", border: "1px solid #1e1e24", boxShadow: "0 8px 32px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: "system-ui, -apple-system, sans-serif" } },
+            // Header
+            ce("div", { style: { padding: "12px 16px", borderBottom: "1px solid #1e1e24", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+              ce("span", { style: { fontSize: "12px", fontWeight: 700, color: "#6b6b80", textTransform: "uppercase", letterSpacing: "0.06em" } }, "Chat"),
+              ce("button", { onClick: () => setOpen(false), style: { background: "none", border: "none", color: "#6b6b80", cursor: "pointer", fontSize: "16px", padding: "2px" } }, "\u2715")),
+            // Messages
+            ce("div", { ref: listRef, style: { flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: "6px", minHeight: "200px", maxHeight: "340px" } },
+              messages.length === 0
+                ? ce("div", { style: { color: "#4a4a5a", fontSize: "13px", textAlign: "center", padding: "32px 0" } }, "No messages yet")
+                : messages.map(msg => {
+                    const { username, type } = _parseActor(msg.actorId);
+                    const isMe = msg.actorId === actorId;
+                    return ce("div", { key: msg.id, style: { display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start" } },
+                      ce("div", { style: { display: "flex", gap: "6px", alignItems: "baseline", flexDirection: isMe ? "row-reverse" : "row" } },
+                        ce("span", { style: { fontSize: "11px", fontWeight: 600, color: colors[type] || colors.unknown } }, username),
+                        ce("span", { style: { fontSize: "10px", color: "#4a4a5a" } }, _fmtTime(msg.ts))),
+                      ce("div", { style: { background: isMe ? "#6366f1" : "#1e1e2e", color: isMe ? "#fff" : "#e2e2e8", padding: "6px 10px", borderRadius: "10px", borderTopRightRadius: isMe ? "2px" : "10px", borderTopLeftRadius: isMe ? "10px" : "2px", fontSize: "13px", lineHeight: 1.4, maxWidth: "240px", wordBreak: "break-word" } }, msg.message));
+                  })),
+            // Input
+            ce("div", { style: { padding: "8px 12px", borderTop: "1px solid #1e1e24", display: "flex", gap: "8px" } },
+              ce("input", { type: "text", value: inputVal, onChange: (e) => setInputVal(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }, placeholder: "Type a message...", disabled: sending,
+                style: { flex: 1, padding: "6px 10px", fontSize: "13px", border: "1px solid #334155", borderRadius: "6px", background: "#1e293b", color: "#fff", outline: "none", fontFamily: "system-ui, sans-serif" } }),
+              ce("button", { onClick: handleSend, disabled: sending || !inputVal.trim(),
+                style: { padding: "6px 12px", borderRadius: "6px", background: "#6366f1", color: "#fff", border: "none", fontSize: "13px", cursor: sending || !inputVal.trim() ? "not-allowed" : "pointer", opacity: sending || !inputVal.trim() ? 0.5 : 1, fontWeight: 500 } }, "Send"))
+          )
+        );
+      },
+      // ── ReportBug ─────────────────────────────────────────
+      ReportBug: function ReportBug({ callTool, actorId, ...props }) {
+        const [phase, setPhase] = useState("idle"); // idle | capturing | form | submitted
+        const [screenshot, setScreenshot] = useState(null);
+        const [desc, setDesc] = useState("");
+        const [submitting, setSubmitting] = useState(false);
+
+        async function captureScreenshot() {
+          try {
+            const root = document.getElementById("root");
+            if (!root) return null;
+            const canvases = root.querySelectorAll("canvas");
+            if (canvases.length === 1) {
+              const cvs = canvases[0];
+              const rr = root.getBoundingClientRect(), cr = cvs.getBoundingClientRect();
+              if (Math.abs(cr.width - rr.width) < 20 && Math.abs(cr.height - rr.height) < 20) return cvs.toDataURL("image/png");
+            }
+            if (typeof html2canvas === "function") {
+              const captured = await html2canvas(root, { backgroundColor: "#0a0a0a", useCORS: true, logging: false, scale: 0.5 });
+              return captured.toDataURL("image/png");
+            }
+            return null;
+          } catch { return null; }
+        }
+
+        async function handleOpen() {
+          setPhase("capturing");
+          const dataUrl = await captureScreenshot();
+          setScreenshot(dataUrl);
+          setPhase("form");
+        }
+        function handleCancel() { setPhase("idle"); setScreenshot(null); setDesc(""); }
+        async function handleSubmit() {
+          if (submitting) return;
+          setSubmitting(true);
+          try {
+            await callTool("_bug.report", { description: desc || undefined, screenshot: screenshot || undefined, metadata: { userAgent: navigator.userAgent } });
+            setPhase("submitted"); setDesc(""); setScreenshot(null);
+            setTimeout(() => setPhase("idle"), 2000);
+          } catch {} finally { setSubmitting(false); }
+        }
+
+        const bugBtn = ce("button", { onClick: phase === "idle" ? handleOpen : undefined, title: "Report Bug",
+          style: { position: "fixed", bottom: "112px", right: "16px", zIndex: 9990, width: "40px", height: "40px", borderRadius: "50%", background: phase === "capturing" ? "#334155" : "#1e1e2e", border: "1px solid #334155", color: "#94a3b8", fontSize: "18px", cursor: phase === "idle" ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", ...props.style } },
+          phase === "submitted"
+            ? ce("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "#22c55e", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round" }, ce("polyline", { points: "20 6 9 17 4 12" }))
+            : ce("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" },
+                ce("ellipse", { cx: 12, cy: 14, rx: 5, ry: 6 }), ce("path", { d: "M12 8V2" }), ce("path", { d: "M9 3l3 5 3-5" }),
+                ce("path", { d: "M7 14H2" }), ce("path", { d: "M22 14h-5" }), ce("path", { d: "M7.5 10.5L4 8" }), ce("path", { d: "M16.5 10.5L20 8" }))
+        );
+
+        if (phase !== "form") return bugBtn;
+
+        return ce("div", null,
+          bugBtn,
+          ce("div", { onClick: handleCancel, style: { position: "fixed", inset: 0, zIndex: 9995, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" } },
+            ce("div", { onClick: (e) => e.stopPropagation(), style: { background: "#1e1e2e", borderRadius: "12px", padding: "20px", boxShadow: "0 20px 60px rgba(0,0,0,0.5)", maxWidth: "400px", width: "90%", border: "1px solid #334155", fontFamily: "system-ui, sans-serif" } },
+              ce("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" } },
+                ce("h3", { style: { margin: 0, fontSize: "1.1rem", fontWeight: 600, color: "#fff" } }, "Report Bug"),
+                ce("button", { onClick: handleCancel, style: { background: "none", border: "none", fontSize: "1.25rem", cursor: "pointer", color: "#94a3b8", padding: "4px" } }, "\u2715")),
+              screenshot ? ce("img", { src: screenshot, alt: "Screenshot", style: { width: "100%", borderRadius: "8px", marginBottom: "12px", border: "1px solid #334155" } })
+                : ce("div", { style: { padding: "24px", textAlign: "center", color: "#6b6b80", fontSize: "13px", border: "1px dashed #334155", borderRadius: "8px", marginBottom: "12px" } }, "Screenshot unavailable"),
+              ce("textarea", { value: desc, onChange: (e) => setDesc(e.target.value), placeholder: "What's wrong? (optional)", rows: 3,
+                style: { width: "100%", padding: "8px 12px", fontSize: "13px", border: "1px solid #334155", borderRadius: "6px", background: "#1e293b", color: "#fff", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "system-ui, sans-serif", marginBottom: "12px" } }),
+              ce("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } },
+                ce("button", { onClick: handleCancel, style: { padding: "8px 16px", borderRadius: "6px", background: "transparent", color: "#94a3b8", border: "1px solid #334155", fontSize: "13px", cursor: "pointer", fontWeight: 500 } }, "Cancel"),
+                ce("button", { onClick: handleSubmit, disabled: submitting, style: { padding: "8px 16px", borderRadius: "6px", background: "#ef4444", color: "#fff", border: "none", fontSize: "13px", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.5 : 1, fontWeight: 500 } }, submitting ? "Sending..." : "Submit Report"))
+            )
+          )
         );
       },
     };
@@ -513,6 +710,7 @@
         let participants = [];
         let roomConfig = {};
         let Canvas = null;
+        let hotReloadKey = 0;
 
         function render() {
           if (!Canvas || !reactRoot) return;
@@ -526,7 +724,7 @@
           };
 
           reactRoot.render(
-            ce(CanvasErrorBoundary, null,
+            ce(CanvasErrorBoundary, { key: hotReloadKey },
               ce(Canvas, {
                 roomId: ROOM_ID,
                 actorId,
@@ -669,6 +867,7 @@
               const experience = mod.default ?? mod;
               if (experience?.Canvas) {
                 Canvas = experience.Canvas;
+                hotReloadKey++;
                 render();
                 console.log("[viewer] Hot reloaded");
               }

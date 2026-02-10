@@ -1,603 +1,384 @@
-import { defineExperience, defineTool, Button, Stack } from "@vibevibes/sdk";
+import React from "react";
 import { z } from "zod";
-import React, { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
+import {
+  defineExperience,
+  defineTool,
+  defineTest,
+  ChatPanel,
+  ReportBug,
+  createChatTools,
+  createChatHints,
+  createBugReportTools,
+  createBugReportHints,
+} from "@vibevibes/sdk";
 
-// Default camera position for new participants
-const DEFAULT_CAMERA = {
-  position: { x: 5, y: 5, z: 5 },
-  lookAt: { x: 0, y: 0, z: 0 },
+const { useState, useRef, useEffect } = React;
+
+// ── Constants ───────────────────────────────────────────────────────────
+
+const W = 800;
+const H = 600;
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// ── Emoji map ───────────────────────────────────────────────────────────
+
+const EMOJI: Record<string, string> = {
+  tree: "🌳", rock: "🪨", water: "🌊", flower: "🌻", house: "🏡",
+  creature: "🐾", player: "🧑‍🌾", ai: "🤖",
 };
 
-// Canvas Component - renders the 3D scene from each participant's POV
-function Canvas({ actorId, sharedState, callTool, ephemeralState, setEphemeral, participants }: any) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+// ── Tools ───────────────────────────────────────────────────────────────
 
-  const [showControls, setShowControls] = useState(true);
-  const [objectType, setObjectType] = useState<"box" | "sphere" | "cylinder">("box");
+const tools = [
+  defineTool({
+    name: "sandbox.say",
+    description: "Say something in the world. Everyone sees it.",
+    input_schema: z.object({ text: z.string().min(1).max(500) }),
+    handler: (ctx, input) => {
+      const state = ctx.state as any;
+      const msg = { id: uid(), actor: ctx.actorId, text: input.text, ts: ctx.timestamp };
+      ctx.setState({ ...state, messages: [...(state.messages || []), msg].slice(-50) });
+      return { said: input.text };
+    },
+  }),
 
-  // Get this participant's camera settings from ephemeral state
-  const myCamera = ephemeralState[actorId]?.camera || DEFAULT_CAMERA;
-
-  // Camera movement handlers
-  const moveCamera = (dx: number, dy: number, dz: number) => {
-    const newCamera = {
-      position: {
-        x: myCamera.position.x + dx,
-        y: myCamera.position.y + dy,
-        z: myCamera.position.z + dz,
-      },
-      lookAt: myCamera.lookAt,
-    };
-    setEphemeral({ camera: newCamera });
-  };
-
-  const rotateCamera = (angle: number) => {
-    const centerX = myCamera.lookAt.x;
-    const centerZ = myCamera.lookAt.z;
-    const radius = Math.sqrt(
-      Math.pow(myCamera.position.x - centerX, 2) +
-      Math.pow(myCamera.position.z - centerZ, 2)
-    );
-    const currentAngle = Math.atan2(
-      myCamera.position.z - centerZ,
-      myCamera.position.x - centerX
-    );
-    const newAngle = currentAngle + (angle * Math.PI) / 180;
-
-    const newCamera = {
-      position: {
-        x: centerX + radius * Math.cos(newAngle),
-        y: myCamera.position.y,
-        z: centerZ + radius * Math.sin(newAngle),
-      },
-      lookAt: myCamera.lookAt,
-    };
-    setEphemeral({ camera: newCamera });
-  };
-
-  const addObject = async () => {
-    await callTool("object.add", {
-      type: objectType,
-      x: myCamera.lookAt.x,
-      y: myCamera.lookAt.y,
-      z: myCamera.lookAt.z,
-      size: 1,
-      color: ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff"][Math.floor(Math.random() * 5)],
-    });
-  };
-
-  // Initialize Three.js scene
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    // Scene
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e);
-    sceneRef.current = scene;
-
-    // Camera
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
-    cameraRef.current = camera;
-
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    containerRef.current.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(10, 10, 10);
-    scene.add(directionalLight);
-
-    // Grid helper
-    const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
-    scene.add(gridHelper);
-
-    // Add some objects from shared state
-    const objects = sharedState.objects || [];
-    objects.forEach((obj: any) => {
-      let mesh: THREE.Mesh;
-
-      switch (obj.type) {
-        case "box":
-          mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(obj.size, obj.size, obj.size),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        case "sphere":
-          mesh = new THREE.Mesh(
-            new THREE.SphereGeometry(obj.size / 2, 32, 32),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        case "cylinder":
-          mesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(obj.size / 2, obj.size / 2, obj.size, 32),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        default:
-          return;
+  defineTool({
+    name: "sandbox.move",
+    description: "Move your entity to a position in the world.",
+    input_schema: z.object({ x: z.number().min(0).max(W), y: z.number().min(0).max(H) }),
+    handler: (ctx, input) => {
+      const state = ctx.state as any;
+      const target = { x: input.x, y: input.y };
+      const entities = [...(state.entities || [])];
+      const idx = entities.findIndex((e: any) => e.id === ctx.actorId);
+      if (idx >= 0) {
+        entities[idx] = { ...entities[idx], target };
+      } else {
+        entities.push({
+          id: ctx.actorId,
+          type: ctx.actorId.includes("-ai-") ? "ai" : "player",
+          pos: target,
+          target,
+          label: ctx.actorId.split("-")[0],
+        });
       }
+      ctx.setState({ ...state, entities });
+      return { moved: target };
+    },
+  }),
 
-      mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
-      mesh.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
-      scene.add(mesh);
-    });
+  defineTool({
+    name: "sandbox.spawn",
+    description: "Place a new entity in the world.",
+    input_schema: z.object({
+      type: z.string().min(1),
+      x: z.number().min(0).max(W),
+      y: z.number().min(0).max(H),
+      label: z.string().optional(),
+    }),
+    handler: (ctx, input) => {
+      const state = ctx.state as any;
+      const entity = { id: uid(), type: input.type, pos: { x: input.x, y: input.y }, label: input.label };
+      ctx.setState({ ...state, entities: [...(state.entities || []), entity] });
+      return { spawned: entity.id, type: input.type };
+    },
+  }),
 
-    // Handle window resize
-    const handleResize = () => {
-      if (!cameraRef.current || !rendererRef.current) return;
-      cameraRef.current.aspect = window.innerWidth / window.innerHeight;
-      cameraRef.current.updateProjectionMatrix();
-      rendererRef.current.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener("resize", handleResize);
+  ...createChatTools(z),
+  ...createBugReportTools(z),
+];
 
-    // Keyboard controls
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const step = 1;
-      switch (e.key.toLowerCase()) {
-        case "w": moveCamera(0, 0, -step); break;
-        case "s": moveCamera(0, 0, step); break;
-        case "a": moveCamera(-step, 0, 0); break;
-        case "d": moveCamera(step, 0, 0); break;
-        case "q": moveCamera(0, step, 0); break;
-        case "e": moveCamera(0, -step, 0); break;
-        case "arrowleft": rotateCamera(-15); break;
-        case "arrowright": rotateCamera(15); break;
-        case " ": e.preventDefault(); addObject(); break;
-        case "h": setShowControls(prev => !prev); break;
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
+// ── Grass background ────────────────────────────────────────────────────
 
-    // Animation loop
-    let animationId: number;
-    const animate = () => {
-      animationId = requestAnimationFrame(animate);
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
-      }
-    };
-    animate();
+function GrassBackground() {
+  return (
+    <svg width={W} height={H} style={{ position: "absolute", top: 0, left: 0 }}>
+      <defs>
+        <pattern id="grass" patternUnits="userSpaceOnUse" width="40" height="40">
+          <rect width="40" height="40" fill="#4a7c3f" />
+          <rect x="0" y="0" width="20" height="20" fill="#4f8544" opacity="0.5" />
+          <rect x="20" y="20" width="20" height="20" fill="#4f8544" opacity="0.5" />
+        </pattern>
+      </defs>
+      <rect width={W} height={H} fill="url(#grass)" />
+    </svg>
+  );
+}
 
-    // Initialize ephemeral camera if not set
-    if (!ephemeralState[actorId]?.camera) {
-      setEphemeral({ camera: DEFAULT_CAMERA });
-    }
+// ── Entity rendering ────────────────────────────────────────────────────
 
-    return () => {
-      cancelAnimationFrame(animationId);
-      window.removeEventListener("resize", handleResize);
-      window.removeEventListener("keydown", handleKeyDown);
-      if (rendererRef.current && containerRef.current) {
-        containerRef.current.removeChild(rendererRef.current.domElement);
-      }
-    };
-  }, [myCamera, objectType]);
-
-  // Update camera position when ephemeral state changes
-  useEffect(() => {
-    if (cameraRef.current) {
-      cameraRef.current.position.set(
-        myCamera.position.x,
-        myCamera.position.y,
-        myCamera.position.z
-      );
-      cameraRef.current.lookAt(
-        myCamera.lookAt.x,
-        myCamera.lookAt.y,
-        myCamera.lookAt.z
-      );
-    }
-  }, [myCamera]);
-
-  // Update objects when shared state changes
-  useEffect(() => {
-    if (!sceneRef.current) return;
-
-    // Clear existing objects (except lights and grid)
-    const objectsToRemove = sceneRef.current.children.filter(
-      (child) => child instanceof THREE.Mesh && !(child instanceof THREE.GridHelper)
-    );
-    objectsToRemove.forEach((obj) => sceneRef.current!.remove(obj));
-
-    // Add new objects
-    const objects = sharedState.objects || [];
-    objects.forEach((obj: any) => {
-      let mesh: THREE.Mesh;
-
-      switch (obj.type) {
-        case "box":
-          mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(obj.size, obj.size, obj.size),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        case "sphere":
-          mesh = new THREE.Mesh(
-            new THREE.SphereGeometry(obj.size / 2, 32, 32),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        case "cylinder":
-          mesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(obj.size / 2, obj.size / 2, obj.size, 32),
-            new THREE.MeshStandardMaterial({ color: obj.color })
-          );
-          break;
-        default:
-          return;
-      }
-
-      mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
-      mesh.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
-      sceneRef.current!.add(mesh);
-    });
-  }, [sharedState.objects]);
+function EntityNode({ entity, pos }: { entity: any; pos: { x: number; y: number } }) {
+  const isPlayer = entity.type === "player" || entity.type === "ai";
+  const size = isPlayer ? 32 : entity.type === "tree" ? 36 : entity.type === "house" ? 38 : 24;
+  const emoji = EMOJI[entity.type] || "❓";
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
-      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-
-      {/* Info overlay */}
-      <div style={{
+    <div
+      style={{
         position: "absolute",
-        top: 20,
-        left: 20,
-        background: "rgba(0,0,0,0.85)",
-        color: "white",
-        padding: "15px",
-        borderRadius: "8px",
-        fontFamily: "monospace",
-        fontSize: "13px",
-        maxWidth: "300px",
-      }}>
-        <div style={{ marginBottom: "10px" }}>
-          <strong style={{ fontSize: "15px" }}>Your POV: {actorId}</strong>
-        </div>
-        <div>Camera: ({myCamera.position.x.toFixed(1)}, {myCamera.position.y.toFixed(1)}, {myCamera.position.z.toFixed(1)})</div>
-        <div>Objects: {sharedState.objects?.length || 0}</div>
-        <div>Participants: {participants.length}</div>
-      </div>
-
-      {/* Interactive Controls */}
-      {showControls && (
+        left: pos.x - size / 2,
+        top: pos.y - size / 2,
+        width: size,
+        height: size,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: size * 0.85,
+        zIndex: isPlayer ? 20 : Math.round(pos.y),
+        filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.3))",
+      }}
+      title={entity.label || entity.type}
+    >
+      <span style={{ lineHeight: 1 }}>{emoji}</span>
+      {entity.label && (
         <div style={{
-          position: "absolute",
-          bottom: 20,
-          left: 20,
-          background: "rgba(0,0,0,0.85)",
-          color: "white",
-          padding: "20px",
-          borderRadius: "12px",
-          fontFamily: "system-ui, sans-serif",
-          fontSize: "13px",
-          minWidth: "280px",
+          position: "absolute", top: -16, whiteSpace: "nowrap",
+          fontSize: 10, fontWeight: 600, textAlign: "center",
+          color: isPlayer ? "#fff" : "#c8dfc0",
+          textShadow: "0 1px 3px rgba(0,0,0,0.8)",
         }}>
-          <div style={{ marginBottom: "15px" }}>
-            <strong style={{ fontSize: "15px" }}>Controls</strong>
-            <button
-              onClick={() => setShowControls(false)}
-              style={{
-                float: "right",
-                background: "transparent",
-                border: "1px solid #555",
-                color: "#aaa",
-                borderRadius: "4px",
-                padding: "2px 8px",
-                cursor: "pointer",
-                fontSize: "11px",
-              }}
-            >
-              Hide (H)
-            </button>
-          </div>
-
-          {/* Camera Movement */}
-          <div style={{ marginBottom: "15px" }}>
-            <div style={{ color: "#888", marginBottom: "8px", fontSize: "11px" }}>CAMERA MOVEMENT</div>
-            <Stack direction="column" gap="8px">
-              <Stack direction="row" gap="4px">
-                <Button onClick={() => moveCamera(0, 1, 0)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>↑ Up (Q)</Button>
-                <Button onClick={() => moveCamera(0, -1, 0)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>↓ Down (E)</Button>
-              </Stack>
-              <Stack direction="row" gap="4px">
-                <Button onClick={() => moveCamera(-1, 0, 0)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>← Left (A)</Button>
-                <Button onClick={() => moveCamera(1, 0, 0)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>→ Right (D)</Button>
-              </Stack>
-              <Stack direction="row" gap="4px">
-                <Button onClick={() => moveCamera(0, 0, -1)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>Forward (W)</Button>
-                <Button onClick={() => moveCamera(0, 0, 1)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>Back (S)</Button>
-              </Stack>
-              <Stack direction="row" gap="4px">
-                <Button onClick={() => rotateCamera(-15)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>⟲ Rotate Left</Button>
-                <Button onClick={() => rotateCamera(15)} size="sm" style={{ flex: 1, padding: "8px", fontSize: "11px" }}>⟳ Rotate Right</Button>
-              </Stack>
-            </Stack>
-          </div>
-
-          {/* Object Spawning */}
-          <div>
-            <div style={{ color: "#888", marginBottom: "8px", fontSize: "11px" }}>ADD OBJECTS</div>
-            <Stack direction="row" gap="4px" style={{ marginBottom: "8px" }}>
-              <button
-                onClick={() => setObjectType("box")}
-                style={{
-                  flex: 1,
-                  padding: "6px",
-                  background: objectType === "box" ? "#6366f1" : "#333",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                }}
-              >
-                Box
-              </button>
-              <button
-                onClick={() => setObjectType("sphere")}
-                style={{
-                  flex: 1,
-                  padding: "6px",
-                  background: objectType === "sphere" ? "#6366f1" : "#333",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                }}
-              >
-                Sphere
-              </button>
-              <button
-                onClick={() => setObjectType("cylinder")}
-                style={{
-                  flex: 1,
-                  padding: "6px",
-                  background: objectType === "cylinder" ? "#6366f1" : "#333",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                }}
-              >
-                Cylinder
-              </button>
-            </Stack>
-            <Button onClick={addObject} style={{ width: "100%", padding: "10px", fontSize: "12px" }}>
-              Add {objectType.charAt(0).toUpperCase() + objectType.slice(1)} (Space)
-            </Button>
-          </div>
-
-          <div style={{ marginTop: "12px", fontSize: "10px", color: "#666", borderTop: "1px solid #333", paddingTop: "8px" }}>
-            Press H to toggle controls • Arrow keys to rotate
-          </div>
+          {entity.label}
         </div>
-      )}
-
-      {/* Show controls button when hidden */}
-      {!showControls && (
-        <button
-          onClick={() => setShowControls(true)}
-          style={{
-            position: "absolute",
-            bottom: 20,
-            left: 20,
-            background: "rgba(0,0,0,0.7)",
-            color: "white",
-            border: "1px solid #555",
-            borderRadius: "8px",
-            padding: "10px 16px",
-            cursor: "pointer",
-            fontSize: "12px",
-          }}
-        >
-          Show Controls (H)
-        </button>
       )}
     </div>
   );
 }
 
-// Tools for camera control and object manipulation
-const tools = [
-  defineTool({
-    name: "camera.set_position",
-    description: "Set camera position for the calling agent. Each participant has their own camera POV.",
-    input_schema: z.object({
-      x: z.number().describe("X coordinate"),
-      y: z.number().describe("Y coordinate"),
-      z: z.number().describe("Z coordinate"),
-    }),
-    handler: async (ctx, input) => {
-      // This updates the agent's ephemeral state, not shared state
-      // The framework will handle ephemeral state updates automatically
-      // We'll return the new camera position
-      const newCamera = {
-        position: { x: input.x, y: input.y, z: input.z },
-        lookAt: ctx.memory.camera?.lookAt || { x: 0, y: 0, z: 0 },
-      };
+// ── Animated positions hook ─────────────────────────────────────────────
 
-      ctx.setMemory({ camera: newCamera });
+function useAnimatedPositions(entities: any[]) {
+  const posRef = useRef<Record<string, { x: number; y: number }>>({});
+  const [display, setDisplay] = useState<Record<string, { x: number; y: number }>>({});
+  const rafRef = useRef(0);
+  const lastRef = useRef(0);
 
-      return {
-        success: true,
-        camera: newCamera,
-        message: `Camera moved to (${input.x}, ${input.y}, ${input.z})`,
-      };
-    },
-  }),
+  useEffect(() => {
+    for (const e of entities) {
+      if (!posRef.current[e.id]) posRef.current[e.id] = { ...e.pos };
+    }
+    const ids = new Set(entities.map((e: any) => e.id));
+    for (const id of Object.keys(posRef.current)) {
+      if (!ids.has(id)) delete posRef.current[id];
+    }
+  }, [entities]);
 
-  defineTool({
-    name: "camera.look_at",
-    description: "Set what point the camera is looking at",
-    input_schema: z.object({
-      x: z.number().describe("X coordinate to look at"),
-      y: z.number().describe("Y coordinate to look at"),
-      z: z.number().describe("Z coordinate to look at"),
-    }),
-    handler: async (ctx, input) => {
-      const currentCamera = ctx.memory.camera || DEFAULT_CAMERA;
-      const newCamera = {
-        position: currentCamera.position,
-        lookAt: { x: input.x, y: input.y, z: input.z },
-      };
-
-      ctx.setMemory({ camera: newCamera });
-
-      return {
-        success: true,
-        camera: newCamera,
-        message: `Camera now looking at (${input.x}, ${input.y}, ${input.z})`,
-      };
-    },
-  }),
-
-  defineTool({
-    name: "camera.orbit",
-    description: "Orbit camera around a point at a given radius and angle",
-    input_schema: z.object({
-      centerX: z.number().default(0).describe("X coordinate of orbit center"),
-      centerY: z.number().default(0).describe("Y coordinate of orbit center"),
-      centerZ: z.number().default(0).describe("Z coordinate of orbit center"),
-      radius: z.number().default(5).describe("Distance from center"),
-      angleY: z.number().describe("Horizontal angle in degrees (0-360)"),
-      height: z.number().default(5).describe("Height of camera above center"),
-    }),
-    handler: async (ctx, input) => {
-      const angleRad = (input.angleY * Math.PI) / 180;
-      const x = input.centerX + input.radius * Math.cos(angleRad);
-      const z = input.centerZ + input.radius * Math.sin(angleRad);
-      const y = input.centerY + input.height;
-
-      const newCamera = {
-        position: { x, y, z },
-        lookAt: { x: input.centerX, y: input.centerY, z: input.centerZ },
-      };
-
-      ctx.setMemory({ camera: newCamera });
-
-      return {
-        success: true,
-        camera: newCamera,
-        message: `Camera orbiting at ${input.angleY}° around (${input.centerX}, ${input.centerY}, ${input.centerZ})`,
-      };
-    },
-  }),
-
-  defineTool({
-    name: "object.add",
-    description: "Add a 3D object to the shared scene",
-    input_schema: z.object({
-      type: z.enum(["box", "sphere", "cylinder"]).describe("Type of object"),
-      x: z.number().describe("X position"),
-      y: z.number().describe("Y position"),
-      z: z.number().describe("Z position"),
-      size: z.number().default(1).describe("Size of the object"),
-      color: z.string().default("#3498db").describe("Hex color (e.g. #ff0000)"),
-    }),
-    handler: async (ctx, input) => {
-      const objects = ctx.state.objects || [];
-      const newObject = {
-        id: `obj-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        type: input.type,
-        position: { x: input.x, y: input.y, z: input.z },
-        rotation: { x: 0, y: 0, z: 0 },
-        size: input.size,
-        color: input.color,
-        createdBy: ctx.actorId,
-        createdAt: ctx.timestamp,
-      };
-
-      ctx.setState({
-        ...ctx.state,
-        objects: [...objects, newObject],
-      });
-
-      return {
-        success: true,
-        object: newObject,
-        message: `Added ${input.type} at (${input.x}, ${input.y}, ${input.z})`,
-      };
-    },
-  }),
-
-  defineTool({
-    name: "object.remove",
-    description: "Remove a 3D object by its ID",
-    input_schema: z.object({
-      id: z.string().describe("Object ID to remove"),
-    }),
-    handler: async (ctx, input) => {
-      const objects = ctx.state.objects || [];
-      const filtered = objects.filter((obj: any) => obj.id !== input.id);
-
-      if (filtered.length === objects.length) {
-        return {
-          success: false,
-          message: `Object ${input.id} not found`,
-        };
+  useEffect(() => {
+    function tick(now: number) {
+      if (!lastRef.current) lastRef.current = now;
+      const dt = Math.min((now - lastRef.current) / 1000, 0.1);
+      lastRef.current = now;
+      let moved = false;
+      for (const e of entities) {
+        const target = e.target || e.pos;
+        const cur = posRef.current[e.id] || { ...e.pos };
+        const dx = target.x - cur.x, dy = target.y - cur.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1) {
+          const step = Math.min(120 * dt, dist);
+          cur.x += (dx / dist) * step;
+          cur.y += (dy / dist) * step;
+          posRef.current[e.id] = cur;
+          moved = true;
+        } else if (dist > 0) {
+          posRef.current[e.id] = { ...target };
+          moved = true;
+        }
       }
+      if (moved) setDisplay({ ...posRef.current });
+      rafRef.current = requestAnimationFrame(tick);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [entities]);
 
-      ctx.setState({
-        ...ctx.state,
-        objects: filtered,
-      });
+  return display;
+}
 
-      return {
-        success: true,
-        message: `Removed object ${input.id}`,
-      };
-    },
-  }),
+// ── Canvas ──────────────────────────────────────────────────────────────
 
-  defineTool({
-    name: "object.list",
-    description: "List all objects in the scene",
-    input_schema: z.object({}),
-    handler: async (ctx) => {
-      const objects = ctx.state.objects || [];
-      return {
-        count: objects.length,
-        objects: objects.map((obj: any) => ({
-          id: obj.id,
-          type: obj.type,
-          position: obj.position,
-          size: obj.size,
-          color: obj.color,
-          createdBy: obj.createdBy,
-        })),
-      };
-    },
-  }),
-];
+function Canvas(props: any) {
+  const { sharedState, callTool, actorId, ephemeralState, setEphemeral, participants } = props;
+  const state = sharedState || { entities: [], messages: [] };
+  const entities = state.entities || [];
+  const messages = state.messages || [];
+  const display = useAnimatedPositions(entities);
+  const [chatInput, setChatInput] = useState("");
+  const chatRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [messages.length]);
+
+  const handleWorldClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    callTool("sandbox.move", { x: Math.round(e.clientX - rect.left), y: Math.round(e.clientY - rect.top) });
+  };
+
+  const handleSay = () => {
+    if (!chatInput.trim()) return;
+    callTool("sandbox.say", { text: chatInput.trim() });
+    setChatInput("");
+  };
+
+  const sorted = [...entities].sort((a, b) => {
+    return ((display[a.id] || a.pos).y) - ((display[b.id] || b.pos).y);
+  });
+
+  return (
+    <div style={{ display: "flex", height: "100vh", background: "#1a120a", color: "#e5dcc8", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      {/* World */}
+      <div
+        onClick={handleWorldClick}
+        style={{
+          position: "relative", width: W, height: H, margin: 16,
+          borderRadius: 12, overflow: "hidden", cursor: "crosshair", flexShrink: 0,
+          border: "3px solid #5a4020", boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+        }}
+      >
+        <GrassBackground />
+        {sorted.map((e) => (
+          <EntityNode key={e.id} entity={e} pos={display[e.id] || e.pos} />
+        ))}
+        {entities.length === 0 && (
+          <div style={{
+            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 16, color: "#8a7a5a", pointerEvents: "none", fontWeight: 600,
+          }}>
+            Click anywhere to enter the world
+          </div>
+        )}
+      </div>
+
+      {/* Chat panel */}
+      <div style={{
+        flex: 1, display: "flex", flexDirection: "column", margin: "16px 16px 16px 0", minWidth: 0,
+        background: "linear-gradient(180deg, #2a1a0a 0%, #1f140a 100%)", borderRadius: 12,
+        border: "2px solid #5a4020", padding: 16,
+      }}>
+        <h2 style={{ margin: "0 0 12px 0", fontSize: 17, fontWeight: 800, color: "#d4a44a", letterSpacing: 1, borderBottom: "1px solid #3a2a10", paddingBottom: 10 }}>
+          The Sandbox
+        </h2>
+        <div ref={chatRef} style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2, paddingRight: 8 }}>
+          {messages.map((msg: any) => (
+            <div key={msg.id} style={{ fontSize: 13, lineHeight: 1.5, padding: "5px 0", borderBottom: "1px solid #2a1a0a" }}>
+              <span style={{
+                fontWeight: 700, marginRight: 6,
+                color: msg.actor === "system" ? "#8a7a5a" : msg.actor.includes("-ai-") ? "#c084fc" : "#60a5fa",
+              }}>
+                {msg.actor === "system" ? "system" : msg.actor.includes("-ai-") ? "🤖 ai" : `🧑‍🌾 ${msg.actor.split("-")[0]}`}:
+              </span>
+              <span style={{ color: "#d4c4a0" }}>{msg.text}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <input
+            type="text" value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSay()}
+            placeholder="Say something..."
+            style={{
+              flex: 1, padding: "10px 14px", fontSize: 13, background: "#1a0f05",
+              border: "2px solid #5a4020", borderRadius: 8, color: "#e5dcc8", outline: "none",
+            }}
+          />
+          <button onClick={handleSay} style={{
+            padding: "10px 18px", fontSize: 13, fontWeight: 700, background: "#b45309",
+            color: "#fff", border: "2px solid #d97706", borderRadius: 8, cursor: "pointer",
+          }}>
+            Say
+          </button>
+        </div>
+      </div>
+
+      {/* Standardized UI */}
+      <ChatPanel
+        sharedState={sharedState}
+        callTool={callTool}
+        actorId={actorId}
+        ephemeralState={ephemeralState || {}}
+        setEphemeral={setEphemeral || (() => {})}
+        participants={participants || []}
+      />
+      <ReportBug callTool={callTool} actorId={actorId} />
+    </div>
+  );
+}
+
+// ── Experience ──────────────────────────────────────────────────────────
 
 export default defineExperience({
   manifest: {
-    id: "threejs-pov",
-    version: "0.0.1",
-    title: "Three.js Multi-POV Experience",
-    description: "A 3D scene where each participant (human or agent) has their own camera perspective. Agents can move their camera and add objects to the shared scene.",
+    id: "the-sandbox",
+    title: "The Sandbox",
+    description: "A 2D world where human and AI build together in real-time.",
+    version: "0.1.0",
     requested_capabilities: [],
+    category: "creative",
+    tags: ["sandbox", "creative", "2d", "worldbuilding"],
+    agentSlots: [
+      {
+        role: "builder",
+        systemPrompt: `You are a builder in a shared 2D sandbox world. You and the human both exist as entities in this world. You can see the world state and chat messages via watch.
+
+When the human asks you to build something:
+1. Use sandbox.say to acknowledge what you're building
+2. Use sandbox.spawn to place new entities (tree, rock, water, flower, house, creature)
+3. Use sandbox.move to move yourself around the world
+
+The world is ${W}x${H} pixels. Position entities within these bounds.
+You can also use _chat.send to reply in the collapsible chat panel.`,
+        allowedTools: ["sandbox.say", "sandbox.move", "sandbox.spawn", "_chat.send"],
+        autoSpawn: true,
+        maxInstances: 1,
+      },
+    ],
   },
   Canvas,
   tools,
+  agentHints: [...createChatHints(), ...createBugReportHints()],
+  initialState: {
+    entities: [],
+    messages: [
+      { id: "welcome", actor: "system", text: "Welcome to The Sandbox. Click the world to enter, then tell the AI what to build.", ts: Date.now() },
+    ],
+  },
+  tests: [
+    defineTest({
+      name: "say adds message",
+      run: async ({ tool, ctx: makeCtx, expect }) => {
+        const say = tool("sandbox.say");
+        const c = makeCtx({ state: { entities: [], messages: [] } });
+        await say.handler(c, { text: "hello" });
+        const s = c.getState();
+        expect(s.messages.length).toBe(1);
+        expect(s.messages[0].text).toBe("hello");
+      },
+    }),
+    defineTest({
+      name: "spawn creates entity",
+      run: async ({ tool, ctx: makeCtx, expect }) => {
+        const spawn = tool("sandbox.spawn");
+        const c = makeCtx({ state: { entities: [], messages: [] } });
+        await spawn.handler(c, { type: "tree", x: 100, y: 100 });
+        const s = c.getState();
+        expect(s.entities.length).toBe(1);
+        expect(s.entities[0].type).toBe("tree");
+      },
+    }),
+    defineTest({
+      name: "move creates player entity if missing",
+      run: async ({ tool, ctx: makeCtx, expect }) => {
+        const move = tool("sandbox.move");
+        const c = makeCtx({ state: { entities: [], messages: [] } });
+        await move.handler(c, { x: 50, y: 50 });
+        const s = c.getState();
+        expect(s.entities.length).toBe(1);
+        expect(s.entities[0].pos.x).toBe(50);
+      },
+    }),
+  ],
 });
