@@ -50,8 +50,8 @@ const CJS_BASE_SHIMS: Record<string, string> = {
   import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
   import_zod: "{ z: z, default: z }",
   import_yjs: "{ default: Y }",
-  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
-  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
 };
 
 /**
@@ -134,7 +134,15 @@ export async function bundleForServer(entryPath: string) {
  */
 export async function evalServerBundle(serverCode: string): Promise<any> {
   const sdk = await import("@vibevibes/sdk");
-  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig } = sdk;
+  const { defineExperience, defineTool, defineTest, undoTool, defineRoomConfig, quickTool } = sdk as any;
+  const phaseTool = (sdk as any).phaseTool ?? ((zod: any, validPhases?: readonly string[]) => ({
+    name: "_phase.set",
+    description: "Transition to a new phase/stage of the experience",
+    input_schema: zod.object({ phase: validPhases ? zod.enum(validPhases as [string, ...string[]]) : zod.string() }),
+    risk: "low", capabilities_required: ["state.write"],
+    handler: async (ctx: any, input: { phase: string }) => { ctx.setState({ ...ctx.state, phase: input.phase }); return { phase: input.phase }; },
+  }));
+  const defineStream = (sdk as any).defineStream ?? ((c: any) => c);
   // Stub React for server-side (tools don't render)
   const noop = () => null;
   const stubReact = {
@@ -146,7 +154,7 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const zodModule = await import("zod");
   const z = zodModule.z ?? zodModule.default ?? zodModule;
 
-  // Stubs for browser-only components (referenced in CJS shims)
+  // Stubs for browser-only components and hooks (referenced in CJS shims)
   const createChatTools = (sdk as any).createChatTools ?? (() => []);
   const createChatHints = (sdk as any).createChatHints ?? (() => []);
   const useChat = noop;
@@ -154,6 +162,14 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const createBugReportTools = (sdk as any).createBugReportTools ?? (() => []);
   const createBugReportHints = (sdk as any).createBugReportHints ?? (() => []);
   const ReportBug = noop;
+  const useBlob = noop;
+  const useUndo = noop;
+  const usePhase = noop;
+  const useParticipants = noop;
+  const ColorPicker = noop;
+  const Slider = noop;
+  const Button = noop;
+  const Badge = noop;
 
   // Scene-related exports (tools work server-side, renderers/hooks are stubs)
   const SceneRenderer = noop;
@@ -191,10 +207,11 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
 
   const fn = new Function(
     "React", "Y", "z",
-    "defineExperience", "defineTool", "defineTest", "undoTool",
+    "defineExperience", "defineTool", "defineTest", "defineStream", "quickTool", "phaseTool", "undoTool",
     "defineRoomConfig",
     "createChatTools", "createChatHints", "useChat", "ChatPanel",
     "createBugReportTools", "createBugReportHints", "ReportBug",
+    "useBlob", "useUndo", "usePhase", "useParticipants", "ColorPicker", "Slider", "Button", "Badge",
     "SceneRenderer", "useSceneTweens", "useParticleTick",
     "useSceneInteraction", "useSceneDrag", "useSceneSelection", "useSceneViewport",
     "createScene", "createNode", "sceneTools", "sceneHints",
@@ -210,10 +227,11 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const fakeModule = { exports: {} };
   const result = fn(
     stubReact, {}, z,
-    defineExperience, defineTool, defineTest, undoTool,
+    defineExperience, defineTool, defineTest, defineStream, quickTool, phaseTool, undoTool,
     defineRoomConfig,
     createChatTools, createChatHints, useChat, ChatPanel,
     createBugReportTools, createBugReportHints, ReportBug,
+    useBlob, useUndo, usePhase, useParticipants, ColorPicker, Slider, Button, Badge,
     SceneRenderer, useSceneTweens, useParticleTick,
     useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport,
     createScene, createNode, sceneTools, sceneHints,
@@ -251,11 +269,12 @@ export async function bundleForClient(entryPath: string): Promise<string> {
   code = stripExternalImports(code);
 
   // Strip user-code React hook destructuring that would collide with injected globals.
-  // Pattern: `const { useState, useEffect, ... } = React;` or `var { useState } = React;`
+  // Pattern: `const { useState, useEffect, ... } = React;` or `var { useState } = React2;`
+  // esbuild numbers variants (React, React2, React3) when multiple files import React.
   // These are already provided by the injected baseGlobals below, so duplicates cause
   // "Identifier 'X' has already been declared" at runtime.
   code = code.replace(
-    /(?:const|let|var)\s+\{[^}]*?\b(?:useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer)\b[^}]*?\}\s*=\s*React\s*;/g,
+    /(?:const|let|var)\s+\{[^}]*?\b(?:useState|useEffect|useCallback|useMemo|useRef|useContext|useReducer)\b[^}]*?\}\s*=\s*React\d*\s*;/g,
     "/* [vibevibes] stripped duplicate React destructuring */"
   );
 
@@ -282,9 +301,11 @@ const z = globalThis.z;
 const defineExperience = globalThis.defineExperience || ((m) => m);
 const defineTool = globalThis.defineTool || ((c) => ({ risk: "low", capabilities_required: [], ...c }));
 const defineTest = globalThis.defineTest || ((c) => c);
+const defineStream = globalThis.defineStream || ((c) => c);
 const defineRoomConfig = globalThis.defineRoomConfig || ((c) => c);
 const quickTool = globalThis.quickTool;
-const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle, useChat } = globalThis.vibevibesHooks || {};
+const phaseTool = globalThis.phaseTool;
+const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnimationFrame, useFollow, useTypingIndicator, useUndo, useDebounce, useThrottle, useChat, useBlob, usePhase } = globalThis.vibevibesHooks || {};
 const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs, ChatPanel, ReportBug } = globalThis.vibevibesComponents || {};
 const undoTool = globalThis.undoTool || (() => ({}));
 const createChatTools = globalThis.createChatTools || (() => []);
@@ -296,51 +317,23 @@ const { SceneRenderer, useSceneTweens, useParticleTick, useSceneInteraction, use
 
   // When multiple files import the same external, esbuild ESM creates numbered
   // variable references (React2, z2, etc). Alias them back to the base global.
-  const esmAliases: Record<string, string> = {
-    React: "React",
-    useState: "useState",
-    useEffect: "useEffect",
-    useCallback: "useCallback",
-    useMemo: "useMemo",
-    useRef: "useRef",
-    useContext: "useContext",
-    useReducer: "useReducer",
-    Y: "Y",
-    z: "z",
-    defineExperience: "defineExperience",
-    defineTool: "defineTool",
-    defineTest: "defineTest",
-    createChatTools: "createChatTools",
-    createChatHints: "createChatHints",
-    createBugReportTools: "createBugReportTools",
-    createBugReportHints: "createBugReportHints",
-    ChatPanel: "ChatPanel",
-    ReportBug: "ReportBug",
-    useChat: "useChat",
-    SceneRenderer: "SceneRenderer",
-    useSceneTweens: "useSceneTweens",
-    useParticleTick: "useParticleTick",
-    useSceneInteraction: "useSceneInteraction",
-    useSceneDrag: "useSceneDrag",
-    useSceneSelection: "useSceneSelection",
-    useSceneViewport: "useSceneViewport",
-    createScene: "createScene",
-    createNode: "createNode",
-    sceneTools: "sceneTools",
-    sceneHints: "sceneHints",
-    createSceneTools: "createSceneTools",
-    createSceneHints: "createSceneHints",
-    walkNodes: "walkNodes",
-    nodeById: "nodeById",
-    findNodes: "findNodes",
-    cloneScene: "cloneScene",
-    PathBuilder: "PathBuilder",
-    createRuleTools: "createRuleTools",
-    createRuleHints: "createRuleHints",
-    ruleTools: "ruleTools",
-    useRuleTick: "useRuleTick",
-    nodeMatchesSelector: "nodeMatchesSelector",
-  };
+  // Auto-extract all identifiers declared in baseGlobals so nothing gets missed.
+  const esmAliases: Record<string, string> = {};
+  {
+    // Match: const X =, const { A, B, C } =, function X(
+    // This catches every identifier declared in the injected baseGlobals.
+    const constAssign = /\bconst\s+(\w+)\s*=/g;
+    const constDestructure = /\bconst\s+\{([^}]+)\}/g;
+    const funcDecl = /\bfunction\s+(\w+)\s*\(/g;
+    let m;
+    while ((m = constAssign.exec(baseGlobals)) !== null) esmAliases[m[1]] = m[1];
+    while ((m = constDestructure.exec(baseGlobals)) !== null) {
+      for (const name of m[1].split(",").map(s => s.trim()).filter(Boolean)) {
+        esmAliases[name] = name;
+      }
+    }
+    while ((m = funcDecl.exec(baseGlobals)) !== null) esmAliases[m[1]] = m[1];
+  }
 
   const aliasLines: string[] = [];
   for (const [baseName, target] of Object.entries(esmAliases)) {
@@ -370,6 +363,53 @@ export async function buildExperience(entry?: string) {
     bundleForClient(entryPath),
   ]);
   return { serverCode, clientCode };
+}
+
+/**
+ * Validate a client bundle for common issues that would crash at runtime.
+ * Checks: syntax errors (SyntaxError), duplicate declarations, unresolved numbered references.
+ * Returns null if OK, or an error message string.
+ */
+export function validateClientBundle(code: string): string | null {
+  // 1. Syntax check — strip ESM exports so new Function() can parse it
+  const cleaned = code
+    .replace(/\bexport\s*\{[^}]*\}/g, "")
+    .replace(/\bexport\s+default\s+/g, "var __default = ")
+    .replace(/\bexport\s+(const|let|var|function|class)\s/g, "$1 ");
+  try {
+    new Function(cleaned);
+  } catch (err: any) {
+    return `SyntaxError: ${err.message}`;
+  }
+
+  // 2. Unresolved numbered references check (e.g. useToolCall2, Button3)
+  // Collect all declared identifiers
+  const definedNames = new Set<string>();
+  const lines = code.split("\n");
+  for (const line of lines) {
+    let m;
+    if ((m = line.match(/\b(?:const|let|var)\s+(\w+)\s*=/))) definedNames.add(m[1]);
+    if ((m = line.match(/\bfunction\s+(\w+)\s*\(/))) definedNames.add(m[1]);
+    if ((m = line.match(/\b(?:const|let|var)\s+\{([^}]+)\}/))) {
+      for (const n of m[1].split(",").map((s: string) => s.trim()).filter(Boolean)) definedNames.add(n);
+    }
+  }
+  // Scan for Foo2, Foo3, etc. where Foo is defined but Foo2 is not
+  const refPattern = /\b([A-Za-z_]\w*?)(\d+)\b/g;
+  const unresolved: string[] = [];
+  let match;
+  while ((match = refPattern.exec(code)) !== null) {
+    const numbered = match[0];
+    const base = match[1];
+    if (!definedNames.has(numbered) && definedNames.has(base) && base.length > 1) {
+      if (!unresolved.includes(numbered)) unresolved.push(numbered);
+    }
+  }
+  if (unresolved.length > 0) {
+    return `Unresolved references (will crash at runtime): ${unresolved.join(", ")}`;
+  }
+
+  return null;
 }
 
 // Run directly: tsx runtime/bundler.ts

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "vibevibes": {
-      "command": "npx",
-      "args": ["-y", "@vibevibes/mcp"],
+      "command": "node",
+      "args": ["../mcp/bin/cli.js"],
       "env": {
         "VIBEVIBES_SERVER_URL": "http://localhost:4321"
       }

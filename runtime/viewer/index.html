@@ -6,11 +6,44 @@
   <title>vibe-vibe</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #root { width: 100%; height: 100%; }
+    html, body { width: 100%; height: 100%; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #fff; }
+    #root { width: 100%; height: calc(100% - 40px); }
+    /* ── Topbar ──────────────────────────────────────────── */
+    #topbar {
+      height: 40px; background: #111113; border-bottom: 1px solid #1e1e24;
+      display: flex; align-items: center; padding: 0 16px; gap: 12px;
+      font-size: 13px; z-index: 10000; position: relative;
+    }
+    #topbar .logo { color: #6366f1; font-weight: 700; font-size: 14px; letter-spacing: -0.02em; }
+    #topbar .sep { color: #334155; }
+    #topbar .nav-btn {
+      background: none; border: none; color: #94a3b8; cursor: pointer;
+      font-size: 13px; padding: 4px 8px; border-radius: 4px;
+    }
+    #topbar .nav-btn:hover { background: #1e1e2e; color: #e2e2e8; }
+    #topbar .room-label { color: #6b6b80; font-size: 12px; }
+    /* ── Library ─────────────────────────────────────────── */
+    #library {
+      display: none; width: 100%; height: calc(100% - 40px);
+      overflow-y: auto; padding: 32px; max-width: 720px; margin: 0 auto;
+    }
+    #library.active { display: block; }
+    #library h2 { font-size: 20px; font-weight: 700; margin-bottom: 20px; color: #e2e2e8; }
+    #library h3 { font-size: 14px; font-weight: 600; color: #6b6b80; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; margin-top: 24px; }
+    .lib-card {
+      background: #111113; border: 1px solid #1e1e24; border-radius: 8px;
+      padding: 14px 16px; margin-bottom: 8px; cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .lib-card:hover { border-color: #6366f1; background: #16161a; }
+    .lib-card .title { font-size: 14px; font-weight: 600; color: #e2e2e8; }
+    .lib-card .desc { font-size: 12px; color: #6b6b80; margin-top: 4px; }
+    .lib-card .meta { font-size: 11px; color: #4a4a5a; margin-top: 6px; display: flex; gap: 12px; }
+    .lib-empty { color: #4a4a5a; font-size: 13px; padding: 16px 0; }
     #loading {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: 100vh; gap: 16px; color: #94a3b8;
+      height: calc(100vh - 40px); gap: 16px; color: #94a3b8;
     }
     #loading .spinner {
       width: 32px; height: 32px; border: 2px solid #334155;
@@ -95,6 +128,13 @@
   </style>
 </head>
 <body>
+  <div id="topbar">
+    <span class="logo">vibevibes</span>
+    <span class="sep">/</span>
+    <button class="nav-btn" id="nav-library" onclick="navigateToLibrary()">Library</button>
+    <span class="room-label" id="topbar-room"></span>
+  </div>
+  <div id="library"></div>
   <div id="loading">
     <div class="spinner"></div>
     <div>Loading experience...</div>
@@ -145,6 +185,22 @@
 
     // ── Set up globalThis ────────────────────────────────────
 
+    // Wrap createElement to catch undefined component types — the O(1) safety net.
+    // When a bundle variable resolves to undefined (aliasing issues, missing globals,
+    // browser cache), this catches it at render time and shows a useful error instead
+    // of the cryptic "Function.prototype.call was called on undefined".
+    const _origCE = React.createElement;
+    React.createElement = function(type) {
+      if (type === undefined || type === null) {
+        console.error("[vibevibes] createElement called with undefined component. Props:", arguments[1]);
+        return _origCE("div", {
+          style: { padding: "8px", background: "#2d1b1b", border: "1px solid #ef4444",
+                   borderRadius: "4px", color: "#f87171", fontSize: "12px" }
+        }, "[undefined component]");
+      }
+      return _origCE.apply(this, arguments);
+    };
+
     globalThis.React = React;
     globalThis.Y = Y;
 
@@ -194,8 +250,16 @@
     globalThis.defineExperience = (config) => config;
     globalThis.defineTool = (config) => ({ risk: "low", capabilities_required: [], ...config });
     globalThis.defineTest = (config) => config;
+    globalThis.defineStream = (config) => config;
     globalThis.quickTool = (name, desc, schema, handler) =>
       globalThis.defineTool({ name, description: desc, input_schema: schema, handler });
+    globalThis.phaseTool = (zod, validPhases) => ({
+      name: "_phase.set",
+      description: "Transition to a new phase" + (validPhases ? ` (${validPhases.join(", ")})` : ""),
+      input_schema: validPhases ? zod.object({ phase: zod.enum(validPhases) }) : zod.object({ phase: zod.string() }),
+      risk: "low", capabilities_required: ["state.write"],
+      handler: async (ctx, input) => { ctx.setState({ ...ctx.state, phase: input.phase }); return { phase: input.phase }; },
+    });
 
     // Hooks — implemented inline for the local viewer
     const { useState, useEffect, useCallback, useRef } = React;
@@ -483,10 +547,48 @@
       return { messages, sendMessage, clearChat, setTyping: () => {}, typingUsers: [] };
     }
 
+    // useBlob: fetch binary blob from server, cache in ref
+    function useBlob(blobKey, serverUrl) {
+      const [data, setData] = useState(null);
+      const cacheRef = useRef(new Map());
+      useEffect(() => {
+        if (!blobKey) { setData(null); return; }
+        const cached = cacheRef.current.get(blobKey);
+        if (cached) { setData(cached); return; }
+        const baseUrl = serverUrl || window.location.origin;
+        let cancelled = false;
+        fetch(`${baseUrl}/blobs/${encodeURIComponent(blobKey)}`)
+          .then(res => { if (!res.ok) throw new Error("not found"); return res.arrayBuffer(); })
+          .then(buf => { if (!cancelled) { cacheRef.current.set(blobKey, buf); setData(buf); } })
+          .catch(() => { if (!cancelled) setData(null); });
+        return () => { cancelled = true; };
+      }, [blobKey, serverUrl]);
+      return data;
+    }
+
+    // usePhase — phase/stage machine via shared state
+    function usePhase(sharedState, callTool, config) {
+      const { phases, stateKey = "phase", toolName = "_phase.set" } = config;
+      const current = (sharedState[stateKey] ?? phases[0]);
+      const index = phases.indexOf(current);
+      const safeIndex = index === -1 ? 0 : index;
+      const next = React.useCallback(() => {
+        if (safeIndex < phases.length - 1) callTool(toolName, { phase: phases[safeIndex + 1] }).catch(() => {});
+      }, [safeIndex, phases, callTool, toolName]);
+      const prev = React.useCallback(() => {
+        if (safeIndex > 0) callTool(toolName, { phase: phases[safeIndex - 1] }).catch(() => {});
+      }, [safeIndex, phases, callTool, toolName]);
+      const goTo = React.useCallback((phase) => {
+        if (phases.includes(phase)) callTool(toolName, { phase }).catch(() => {});
+      }, [phases, callTool, toolName]);
+      const is = React.useCallback((phase) => current === phase, [current]);
+      return { current, index: safeIndex, isFirst: safeIndex === 0, isLast: safeIndex === phases.length - 1, next, prev, goTo, is };
+    }
+
     globalThis.vibevibesHooks = {
       useToolCall, useSharedState, useOptimisticTool, useParticipants,
       useAnimationFrame, useFollow, useTypingIndicator,
-      useUndo, useDebounce, useThrottle, useChat,
+      useUndo, useDebounce, useThrottle, useChat, useBlob, usePhase,
     };
 
     // UI Components (minimal inline versions)
@@ -508,7 +610,7 @@
           style: { background: "#1e1e2e", borderRadius: "12px", padding: "16px", border: "1px solid #334155", ...props.style },
           ...props,
         }, children),
-      Input: (props) =>
+      Input: ({ onChange, ...props }) =>
         ce("input", {
           style: {
             padding: "8px 12px", borderRadius: "6px", background: "#1e293b",
@@ -516,6 +618,7 @@
             ...props.style,
           },
           ...props,
+          onChange: onChange ? (e) => onChange(e.target.value) : undefined,
         }),
       Badge: ({ children, ...props }) =>
         ce("span", {
@@ -817,20 +920,164 @@
     const WS_PROTO = location.protocol === "https:" ? "wss:" : "ws:";
     const WS_URL = `${WS_PROTO}//${location.host}`;
 
-    // Room-aware: read ?room= query param (defaults to "local" for host experience)
-    const ROOM_ID = new URLSearchParams(location.search).get("room") || "local";
-    const ROOM_TOKEN = new URLSearchParams(location.search).get("token") || "";
+    // Room-aware: read room ID from URL path (e.g. /room-abc123)
+    function getRoomIdFromPath() {
+      const path = location.pathname.replace(/^\/+/, "");
+      return path || null; // empty string → null (library/root)
+    }
+    let ROOM_ID = getRoomIdFromPath();
+    let currentWs = null;
 
     function showError(msg) {
       document.getElementById("loading").style.display = "none";
+      document.getElementById("library").className = "";
       document.getElementById("error-display").style.display = "block";
       document.getElementById("error-message").textContent = msg;
     }
 
-    async function start() {
+    // ── Library / Navigation ─────────────────────────────────
+
+    function showLibraryView() {
+      document.getElementById("library").className = "active";
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("root").style.display = "none";
+      document.getElementById("error-display").style.display = "none";
+      document.getElementById("activity-toggle").style.display = "none";
+      document.getElementById("activity-panel").classList.remove("open");
+      document.getElementById("topbar-room").textContent = "";
+      loadLibrary();
+    }
+
+    function showRoomView() {
+      document.getElementById("library").className = "";
+      document.getElementById("root").style.display = "block";
+      document.getElementById("activity-toggle").style.display = "flex";
+    }
+
+    globalThis.navigateToLibrary = function() {
+      if (currentWs) { try { currentWs.close(); } catch {} currentWs = null; }
+      history.pushState({}, "", "/");
+      ROOM_ID = null;
+      showLibraryView();
+    };
+
+    function navigateToRoom(roomId) {
+      if (currentWs) { try { currentWs.close(); } catch {} currentWs = null; }
+      ROOM_ID = roomId;
+      history.pushState({}, "", `/${roomId}`);
+      showRoomView();
+      document.getElementById("loading").style.display = "flex";
+      document.getElementById("topbar-room").textContent = roomId;
+      start();
+    }
+
+    // Handle browser back/forward
+    window.addEventListener("popstate", () => {
+      const r = getRoomIdFromPath();
+      if (r) { navigateToRoom(r); }
+      else { if (currentWs) { try { currentWs.close(); } catch {} currentWs = null; } ROOM_ID = null; showLibraryView(); }
+    });
+
+    async function spawnAndNavigate(experienceId) {
       try {
-        // Connect WebSocket — single room, no room ID needed
+        const res = await fetch(`${SERVER}/rooms/spawn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ experienceId, sourceRoomId: "library" }),
+        });
+        const data = await res.json();
+        if (data.error) { showToast(data.error); return; }
+        navigateToRoom(data.roomId);
+      } catch (err) {
+        showToast(`Failed to spawn: ${err.message}`);
+      }
+    }
+    globalThis.spawnAndNavigate = spawnAndNavigate;
+
+    async function loadLibrary() {
+      const lib = document.getElementById("library");
+      lib.innerHTML = '<h2>Library</h2><div style="color:#6b6b80;font-size:13px;">Loading...</div>';
+
+      try {
+        const [experiences, roomList] = await Promise.all([
+          fetch(`${SERVER}/experiences`).then(r => r.json()),
+          fetch(`${SERVER}/rooms`).then(r => r.json()),
+        ]);
+
+        // Filter out host experience and "local" room — host is the homepage, not a playable experience
+        const templateExperiences = experiences.filter(exp => exp.source !== "host");
+        const templateRooms = roomList.filter(room => room.roomId !== "local");
+
+        // Group rooms by experienceId
+        const roomsByExp = {};
+        for (const room of templateRooms) {
+          if (!roomsByExp[room.experienceId]) roomsByExp[room.experienceId] = [];
+          roomsByExp[room.experienceId].push(room);
+        }
+
+        let html = '<h2>Library</h2>';
+
+        // Experiences with their rooms
+        if (templateExperiences.length === 0) {
+          html += '<div class="lib-empty">No experiences registered.</div>';
+        } else {
+          for (const exp of templateExperiences) {
+            const expRooms = roomsByExp[exp.id] || [];
+            const hasRoom = expRooms.length > 0;
+
+            // Experience header card — click goes to first room or spawns one
+            if (hasRoom) {
+              const firstRoom = expRooms[0];
+              html += `<div class="lib-card" onclick="navigateToRoom('${escHtml(firstRoom.roomId)}')">`;
+            } else {
+              html += `<div class="lib-card" onclick="spawnAndNavigate('${escHtml(exp.id)}')">`;
+            }
+            html += `<div class="title">${escHtml(exp.title)}</div>
+              <div class="desc">${escHtml(exp.description)}</div>
+              <div class="meta">
+                <span>${escHtml(exp.id)}</span>
+                <span>v${escHtml(exp.version)}</span>
+                <span>${hasRoom ? expRooms.length + ' room' + (expRooms.length > 1 ? 's' : '') : 'click to launch'}</span>
+              </div>
+            </div>`;
+
+            // Show sub-rooms if more than 1
+            if (expRooms.length > 1) {
+              for (const room of expRooms) {
+                const pCount = room.participantCount || room.participants?.length || 0;
+                html += `<div class="lib-card" style="margin-left:20px;border-left:2px solid #6366f1;" onclick="navigateToRoom('${escHtml(room.roomId)}')">
+                  <div class="title" style="font-size:13px;">${escHtml(room.roomId)}</div>
+                  <div class="meta">
+                    <span>${pCount} participant${pCount !== 1 ? 's' : ''}</span>
+                    <span>${room.eventCount} events</span>
+                  </div>
+                </div>`;
+              }
+            }
+          }
+        }
+
+        lib.innerHTML = html;
+      } catch (err) {
+        lib.innerHTML = `<h2>Library</h2><div class="lib-empty">Failed to load: ${escHtml(err.message)}</div>`;
+      }
+    }
+
+    function escHtml(s) {
+      if (!s) return '';
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // Expose navigateToRoom globally for onclick handlers
+    globalThis.navigateToRoom = navigateToRoom;
+
+    async function start() {
+      const roomId = ROOM_ID || "local";
+      document.getElementById("topbar-room").textContent = roomId;
+      try {
+        // Connect WebSocket
         const ws = new WebSocket(WS_URL);
+        currentWs = ws;
 
         let actorId = "viewer";
         let sharedState = {};
@@ -870,6 +1117,13 @@
           render();
         }
 
+        // ── Stream function (high-frequency, bypasses tool gate) ──────
+        function streamFn(name, input) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "stream", name, input, actorId }));
+          }
+        }
+
         function render() {
           if (!Canvas || !reactRoot) return;
 
@@ -888,7 +1142,7 @@
           reactRoot.render(
             ce(CanvasErrorBoundary, { key: hotReloadKey },
               ce(Canvas, {
-                roomId: ROOM_ID,
+                roomId: roomId,
                 actorId,
                 sharedState: displayState,
                 callTool,
@@ -896,6 +1150,7 @@
                 ephemeralState,
                 setEphemeral,
                 roomConfig,
+                stream: streamFn,
               })
             )
           );
@@ -911,10 +1166,9 @@
           }
 
           try {
-            const baseToolUrl = ROOM_ID === "local"
+            const toolUrl = roomId === "local"
               ? `${SERVER}/tools/${name}`
-              : `${SERVER}/rooms/${ROOM_ID}/tools/${name}`;
-            const toolUrl = ROOM_TOKEN ? `${baseToolUrl}?token=${ROOM_TOKEN}` : baseToolUrl;
+              : `${SERVER}/rooms/${roomId}/tools/${name}`;
             const res = await fetch(toolUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -971,7 +1225,7 @@
         ws.onopen = () => {
           reconnectAttempts = 0; // Reset backoff on successful connection
           const savedActorId = sessionStorage.getItem("vibevibes_actorId");
-          ws.send(JSON.stringify({ type: "join", username: "viewer", roomId: ROOM_ID, actorId: savedActorId }));
+          ws.send(JSON.stringify({ type: "join", username: "viewer", roomId: roomId, actorId: savedActorId }));
         };
 
         ws.onmessage = async (event) => {
@@ -986,9 +1240,9 @@
 
             // Load client bundle (room-aware: external experiences get their own bundle)
             try {
-              const bundleUrl = ROOM_ID === "local"
+              const bundleUrl = roomId === "local"
                 ? `${SERVER}/bundle?_t=${Date.now()}`
-                : `${SERVER}/rooms/${ROOM_ID}/bundle?_t=${Date.now()}`;
+                : `${SERVER}/rooms/${roomId}/bundle?_t=${Date.now()}`;
               const bundleRes = await fetch(bundleUrl);
               const bundleCode = await bundleRes.text();
 
@@ -1006,6 +1260,7 @@
               }
 
               document.getElementById("loading").style.display = "none";
+              showRoomView();
               render();
               updateParticipantList(participants);
             } catch (err) {
@@ -1046,9 +1301,9 @@
           if (msg.type === "experience_updated") {
             // Hot reload: re-fetch bundle and re-render
             try {
-              const bundleUrl = ROOM_ID === "local"
+              const bundleUrl = roomId === "local"
                 ? `${SERVER}/bundle?_t=${Date.now()}`
-                : `${SERVER}/rooms/${ROOM_ID}/bundle?_t=${Date.now()}`;
+                : `${SERVER}/rooms/${roomId}/bundle?_t=${Date.now()}`;
               const bundleRes = await fetch(bundleUrl);
               const bundleCode = await bundleRes.text();
 
@@ -1098,6 +1353,19 @@
                   }
                 }
 
+                // Snapshot all canvases before html2canvas (it can't read WebGL content)
+                const canvasSnapshots = new Map();
+                if (!dataUrl) {
+                  canvases.forEach((cvs) => {
+                    try {
+                      const snap = cvs.toDataURL("image/png");
+                      if (snap && snap.length > 100) {
+                        canvasSnapshots.set(cvs, snap);
+                      }
+                    } catch {}
+                  });
+                }
+
                 // Fallback: html2canvas for DOM/SVG/mixed content
                 if (!dataUrl && typeof html2canvas === "function") {
                   const captured = await html2canvas(root, {
@@ -1105,6 +1373,22 @@
                     useCORS: true,
                     logging: false,
                     scale: 1,
+                    onclone: (doc, clonedRoot) => {
+                      // Replace cloned WebGL canvases with snapshot images
+                      const clonedCanvases = clonedRoot.querySelectorAll("canvas");
+                      clonedCanvases.forEach((clonedCvs, idx) => {
+                        const originalCvs = canvases[idx];
+                        const snapshot = canvasSnapshots.get(originalCvs);
+                        if (snapshot) {
+                          const img = doc.createElement("img");
+                          img.src = snapshot;
+                          img.style.width = clonedCvs.style.width || (clonedCvs.width + "px");
+                          img.style.height = clonedCvs.style.height || (clonedCvs.height + "px");
+                          img.style.display = clonedCvs.style.display;
+                          clonedCvs.parentNode?.replaceChild(img, clonedCvs);
+                        }
+                      });
+                    },
                   });
                   dataUrl = captured.toDataURL("image/png");
                 }
@@ -1133,11 +1417,13 @@
 
         // Reconnect with exponential backoff (no full page reload)
         ws.onclose = () => {
+          // Don't reconnect if user navigated away from this room
+          if (currentWs !== ws) return;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000);
           reconnectAttempts++;
           console.log(`[viewer] WebSocket closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
           showToast(`Disconnected. Reconnecting in ${Math.round(delay/1000)}s...`, "info", delay + 1000);
-          setTimeout(() => start(), delay);
+          setTimeout(() => { if (currentWs === ws || !currentWs) start(); }, delay);
         };
 
       } catch (err) {
@@ -1147,7 +1433,14 @@
 
     let reconnectAttempts = 0;
     let reactRoot = null; // Persists across reconnects to avoid duplicate roots
-    start();
+
+    // Initial routing: if path has a room ID (e.g. /room-abc), connect to it.
+    // Otherwise show the library.
+    if (ROOM_ID) {
+      start();
+    } else {
+      showLibraryView();
+    }
   </script>
 </body>
 </html>

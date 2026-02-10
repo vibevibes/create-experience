@@ -16,7 +16,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { ZodError } from "zod";
 import { EventEmitter } from "events";
-import { bundleForServer, bundleForClient, evalServerBundle } from "./bundler.js";
+import { bundleForServer, bundleForClient, evalServerBundle, validateClientBundle } from "./bundler.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 // ── Error formatting ──────────────────────────────────────────
@@ -43,6 +43,7 @@ interface ToolEvent {
   input: any;
   output?: any;
   error?: string;
+  observation?: Record<string, any>;
 }
 
 interface RoomLink {
@@ -112,7 +113,6 @@ const DEFAULT_ROOM_ID = "local";
 const PORT = parseInt(process.env.PORT || "4321");
 
 let publicUrl: string | null = null;
-let roomToken: string | null = null;
 
 const rooms = new Map<string, Room>();
 const roomLinks: RoomLink[] = [];
@@ -120,6 +120,12 @@ const actorCounters = new Map<string, number>();
 const agentMemory = new Map<string, Record<string, any>>();
 const roomEvents = new EventEmitter();
 roomEvents.setMaxListeners(200);
+
+// ── Blob store ──────────────────────────────────────────
+const blobStore = new Map<string, Buffer>();
+const blobMeta = new Map<string, { size: number; createdAt: number; roomId: string }>();
+const MAX_BLOB_SIZE = 10 * 1024 * 1024; // 10MB per blob
+const MAX_TOTAL_BLOBS = 50 * 1024 * 1024; // 50MB total
 
 // ── Experience cache (replaces single global `experience`) ──
 const experienceCache = new Map<string, LoadedExperience>();
@@ -130,28 +136,25 @@ const spawnCounts = new Map<string, { count: number; windowStart: number }>();
 const SPAWN_WINDOW_MS = 5 * 60 * 1000;
 const MAX_SPAWNS_PER_WINDOW = 5;
 
+// Stream rate limiting: per actor, per stream, per room
+const streamRateLimits = new Map<string, { count: number; windowStart: number }>();
+
+// Periodic cleanup for stream rate limits (every 10 seconds)
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of streamRateLimits) {
+    if (now - entry.windowStart > 5000) streamRateLimits.delete(key);
+  }
+}, 10000);
+
 /** Set the public tunnel URL (called from dev.ts when --share is active). */
 export function setPublicUrl(url: string) {
   publicUrl = url;
 }
 
-/** Set the room token for share-mode authentication (called from dev.ts when --share is active). */
-export function setRoomToken(token: string) {
-  roomToken = token;
-}
-
 /** Get the base URL clients should use (tunnel URL if sharing, localhost otherwise). */
 export function getBaseUrl(): string {
   return publicUrl || `http://localhost:${PORT}`;
-}
-
-/** Get the base URL with token appended (for sharing with others). */
-function getAuthenticatedUrl(): string {
-  const base = getBaseUrl();
-  if (roomToken) {
-    return `${base}?token=${roomToken}`;
-  }
-  return base;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -348,6 +351,12 @@ async function loadExperienceFromPath(entryPath: string): Promise<LoadedExperien
     throw new Error(`Experience at ${entryPath} missing manifest or tools`);
   }
 
+  // Validate client bundle for syntax errors and unresolved references
+  const clientError = validateClientBundle(cCode);
+  if (clientError) {
+    throw new Error(`Client bundle validation failed for ${entryPath}: ${clientError}`);
+  }
+
   const loaded: LoadedExperience = {
     module: mod,
     clientBundle: cCode,
@@ -383,9 +392,10 @@ async function loadExperienceById(experienceId: string): Promise<LoadedExperienc
   console.log(`  Loading external experience '${experienceId}' from ${entryPath}...`);
   const loaded = await loadExperienceFromPath(entryPath);
 
-  // Warn if manifest ID doesn't match registry key
+  // Also cache under registry key if it differs from manifest ID
   if (loaded.module.manifest.id !== experienceId) {
     console.warn(`  Warning: registry key '${experienceId}' but manifest.id is '${loaded.module.manifest.id}'`);
+    experienceCache.set(experienceId, loaded);
   }
 
   console.log(`  Loaded: ${loaded.module.manifest.title} (${loaded.module.tools.length} tools)`);
@@ -415,9 +425,9 @@ async function loadHost(): Promise<LoadedExperience> {
 
 async function spawnRoom(
   sourceRoomId: string,
-  opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean; config?: Record<string, any> | string },
+  opts: { experienceId: string; name?: string; initialState?: Record<string, any>; linkBack?: boolean; config?: Record<string, any> | string; skipRateLimit?: boolean },
 ): Promise<{ roomId: string; url: string; config: Record<string, any> }> {
-  if (!checkSpawnRate(sourceRoomId)) {
+  if (!opts.skipRateLimit && !checkSpawnRate(sourceRoomId)) {
     throw new Error(`Rate limited: max ${MAX_SPAWNS_PER_WINDOW} spawns per ${SPAWN_WINDOW_MS / 60000} minutes`);
   }
 
@@ -458,7 +468,7 @@ async function spawnRoom(
     createdAt: new Date().toISOString(),
   });
 
-  const url = `${getBaseUrl()}?room=${roomId}`;
+  const url = `${getBaseUrl()}/${roomId}`;
   return { roomId, url, config };
 }
 
@@ -476,33 +486,11 @@ app.use((_req, res, next) => {
   next();
 });
 
-// ── Room token auth middleware (only active when --share sets a token) ──
-app.use((req, res, next) => {
-  if (!roomToken) { next(); return; }
-
-  // GET endpoints remain open — viewers, state polling, bundles, screenshots
-  if (req.method === "GET" || req.method === "OPTIONS") { next(); return; }
-
-  // Localhost connections bypass token auth (MCP agents run locally)
-  const host = req.hostname || req.headers.host || "";
-  if (host === "localhost" || host === "127.0.0.1" || host.startsWith("localhost:") || host.startsWith("127.0.0.1:")) { next(); return; }
-
-  // All POST (mutation) endpoints require token
-  const queryToken = req.query.token as string | undefined;
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-  const provided = queryToken || bearerToken;
-
-  if (provided !== roomToken) {
-    res.status(401).json({ error: "Invalid or missing room token" });
-    return;
-  }
-
-  next();
-});
-
-// Serve viewer
+// Serve viewer (no-cache so changes are picked up immediately)
 app.get("/", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   res.sendFile(path.join(__dirname, "viewer", "index.html"));
 });
 app.use("/viewer", express.static(path.join(__dirname, "viewer")));
@@ -552,6 +540,12 @@ function handleJoin(room: Room, req: express.Request, res: express.Response) {
     participants: room.participantList(),
   });
 
+  // Compute observation so agents get a curated view from the start
+  let observation: Record<string, any> | undefined;
+  if (exp.module.observe) {
+    try { observation = exp.module.observe(room.sharedState, null, actorId); } catch {}
+  }
+
   res.json({
     roomId: room.id,
     actorId,
@@ -563,6 +557,7 @@ function handleJoin(room: Room, req: express.Request, res: express.Response) {
     browserUrl: getBaseUrl(),
     config: room.config,
     hasRoomConfig: !!exp.module.roomConfig,
+    observation,
   });
 }
 
@@ -614,10 +609,19 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
   const toolName = req.params.toolName;
   const { actorId, input = {}, owner } = req.body;
 
+  // Handle scoped tool calls from embedded experiences
+  let scopeKey: string | undefined;
+  let resolvedToolName = toolName;
+  if (toolName.includes(':')) {
+    const colonIdx = toolName.indexOf(':');
+    scopeKey = toolName.slice(0, colonIdx);
+    resolvedToolName = toolName.slice(colonIdx + 1);
+  }
+
   // Find tool from the room's experience
-  const tool = exp.module.tools.find((t: any) => t.name === toolName);
+  const tool = exp.module.tools.find((t: any) => t.name === resolvedToolName);
   if (!tool) {
-    res.status(404).json({ error: `Tool '${toolName}' not found` });
+    res.status(404).json({ error: `Tool '${resolvedToolName}' not found` });
     return;
   }
 
@@ -647,6 +651,15 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
       roomConfig: room.config,
     };
 
+    // Scope state for embedded experience tool calls
+    if (scopeKey) {
+      const scopedState = room.sharedState[scopeKey] || {};
+      ctx.state = scopedState;
+      ctx.setState = (newState: Record<string, any>) => {
+        room.sharedState = { ...room.sharedState, [scopeKey!]: newState };
+      };
+    }
+
     // Wire spawnRoom if experience requests the capability
     const capabilities = exp.module.manifest.requested_capabilities || [];
     if (capabilities.includes("room.spawn")) {
@@ -654,6 +667,19 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
         return spawnRoom(room.id, opts);
       };
     }
+
+    // Wire blob operations
+    ctx.setBlob = (key: string, data: ArrayBuffer): string => {
+      const buf = Buffer.from(data);
+      if (buf.length > MAX_BLOB_SIZE) throw new Error(`Blob too large (${buf.length} bytes)`);
+      blobStore.set(key, buf);
+      blobMeta.set(key, { size: buf.length, createdAt: Date.now(), roomId: room.id });
+      return key;
+    };
+    ctx.getBlob = (key: string): ArrayBuffer | undefined => {
+      const buf = blobStore.get(key);
+      return buf ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : undefined;
+    };
 
     // Execute handler
     const output = await tool.handler(ctx, validatedInput);
@@ -669,6 +695,19 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
       output,
     };
 
+    // Compute observation if the experience defines observe
+    let observation: Record<string, any> | undefined;
+    if (exp.module.observe) {
+      try {
+        observation = exp.module.observe(room.sharedState, event, actorId);
+      } catch (e) {
+        // Don't fail the tool call if observe throws
+      }
+    }
+    if (observation) {
+      event.observation = observation;
+    }
+
     // Append event
     room.appendEvent(event);
 
@@ -680,6 +719,7 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
       event,
       changedBy: actorId,
       tool: toolName,
+      observation,
     });
 
     // Emit for long-poll listeners
@@ -690,7 +730,7 @@ async function handleTool(room: Room, req: express.Request, res: express.Respons
       idempotencyCache.set(idempotencyKey, { output, ts: Date.now() });
     }
 
-    res.json({ output });
+    res.json({ output, observation });
   } catch (err: any) {
     const errorMsg = err instanceof ZodError
       ? formatZodError(err, toolName)
@@ -716,15 +756,30 @@ app.post("/tools/:toolName", (req, res) => handleTool(getDefaultRoom(), req, res
 function handleEvents(room: Room, req: express.Request, res: express.Response) {
   const since = parseInt(req.query.since as string) || 0;
   const timeout = Math.min(parseInt(req.query.timeout as string) || 0, 55000);
+  const requestingActorId = req.query.actorId as string | undefined;
 
-  const getNewEvents = () => room.events.filter((e) => e.ts > since);
+  // Helper: compute observation for current state
+  const computeObservation = (events: ToolEvent[]): Record<string, any> | undefined => {
+    const exp = getExperienceForRoom(room);
+    if (!exp?.module?.observe || !requestingActorId) return undefined;
+    try {
+      const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+      return exp.module.observe(room.sharedState, lastEvent, requestingActorId);
+    } catch {
+      return undefined;
+    }
+  };
+
+  const getNewEvents = () => room.events.filter((e) => e.ts > since && e.actorId !== requestingActorId);
 
   let newEvents = getNewEvents();
   if (newEvents.length > 0 || timeout === 0) {
+    const observation = computeObservation(newEvents);
     res.json({
       events: newEvents,
       sharedState: room.sharedState,
       participants: room.participantList(),
+      observation,
     });
     return;
   }
@@ -738,10 +793,12 @@ function handleEvents(room: Room, req: express.Request, res: express.Response) {
     clearTimeout(timer);
     roomEvents.removeListener(`room:${room.id}`, onEvent);
     newEvents = getNewEvents();
+    const observation = computeObservation(newEvents);
     res.json({
       events: newEvents,
       sharedState: room.sharedState,
       participants: room.participantList(),
+      observation,
     });
   };
 
@@ -750,7 +807,15 @@ function handleEvents(room: Room, req: express.Request, res: express.Response) {
   const onEvent = () => {
     // Small delay to batch rapid events
     setTimeout(() => {
-      if (!responded) respond();
+      if (responded) return;
+      // Only respond if there are actual new tool events.
+      // Streams modify state and emit roomEvents but don't create
+      // event log entries — ignore those wake-ups so the long-poll
+      // keeps waiting for real tool events (like _chat.send).
+      const pending = getNewEvents();
+      if (pending.length > 0) {
+        respond();
+      }
     }, 50);
   };
 
@@ -765,6 +830,225 @@ function handleEvents(room: Room, req: express.Request, res: express.Response) {
 }
 
 app.get("/events", (req, res) => handleEvents(getDefaultRoom(), req, res));
+
+// ── Cross-room events (watch all rooms) ────────────────────
+
+app.get("/events/all", (req, res) => {
+  const since = parseInt(req.query.since as string) || 0;
+  const timeout = Math.min(parseInt(req.query.timeout as string) || 0, 55000);
+  const requestingActorId = req.query.actorId as string | undefined;
+
+  const getAllEvents = () => {
+    const allEvents: Array<ToolEvent & { roomId: string }> = [];
+    for (const room of rooms.values()) {
+      for (const e of room.events) {
+        if (e.ts > since) allEvents.push({ ...e, roomId: room.id });
+      }
+    }
+    allEvents.sort((a, b) => a.ts - b.ts);
+    return allEvents;
+  };
+
+  const getRoomSummaries = () =>
+    Array.from(rooms.values()).map((room) => ({
+      roomId: room.id,
+      experienceId: room.experienceId,
+      participants: room.participantList(),
+      eventCount: room.events.length,
+    }));
+
+  let newEvents = getAllEvents();
+  if (newEvents.length > 0 || timeout === 0) {
+    res.json({ events: newEvents, rooms: getRoomSummaries() });
+    return;
+  }
+
+  // Long-poll: wait for any room event
+  let responded = false;
+
+  const respond = () => {
+    if (responded) return;
+    responded = true;
+    clearTimeout(timer);
+    roomEvents.removeListener("room:*", onEvent);
+    for (const room of rooms.values()) {
+      roomEvents.removeListener(`room:${room.id}`, onEvent);
+    }
+    res.json({ events: getAllEvents(), rooms: getRoomSummaries() });
+  };
+
+  const timer = setTimeout(respond, timeout);
+
+  const onEvent = () => {
+    setTimeout(() => {
+      if (responded) return;
+      // Only respond if there are actual new tool events — ignore
+      // stream-only wake-ups (streams don't create event log entries).
+      const pending = getAllEvents();
+      if (pending.length > 0) respond();
+    }, 50);
+  };
+
+  // Listen on all existing rooms
+  for (const room of rooms.values()) {
+    roomEvents.on(`room:${room.id}`, onEvent);
+  }
+
+  req.on("close", () => {
+    responded = true;
+    clearTimeout(timer);
+    for (const room of rooms.values()) {
+      roomEvents.removeListener(`room:${room.id}`, onEvent);
+    }
+  });
+});
+
+// ── Agent context (combined events + observe + hints for Stop hook) ──
+
+const agentCooldowns = new Map<string, Record<string, number>>();
+
+app.get("/agent-context", (req, res) => {
+  const since = parseInt(req.query.since as string) || 0;
+  const timeout = Math.min(parseInt(req.query.timeout as string) || 0, 10000);
+  const actorId = req.query.actorId as string || "unknown";
+
+  // Gather events from ALL rooms (not just default) so the agent sees sub-room activity
+  const getAllNewEvents = () => {
+    const allEvents: (ToolEvent & { roomId: string })[] = [];
+    for (const room of rooms.values()) {
+      for (const e of room.events) {
+        if (e.ts > since && e.actorId !== actorId) {
+          allEvents.push({ ...e, roomId: room.id });
+        }
+      }
+    }
+    return allEvents.sort((a, b) => a.ts - b.ts);
+  };
+
+  // Evaluate hints across all rooms
+  const evaluateAllHints = () => {
+    const allFired: Array<{ trigger: string; suggestedTools: string[]; priority: string; roomId: string }> = [];
+    const cooldowns = agentCooldowns.get(actorId) || {};
+    const now = Date.now();
+
+    for (const room of rooms.values()) {
+      const exp = getExperienceForRoom(room);
+      const hints = exp?.module?.agentHints || [];
+      for (const hint of hints) {
+        const key = `${room.id}:${hint.trigger}`;
+        const lastFired = cooldowns[key] || 0;
+        const cooldownMs = hint.cooldownMs || 5000;
+        if (now - lastFired < cooldownMs) continue;
+
+        if (hint.condition) {
+          try {
+            const fn = new Function("state", "actorId", `return ${hint.condition}`);
+            if (!fn(room.sharedState, actorId)) continue;
+          } catch { continue; }
+        }
+
+        cooldowns[key] = now;
+        allFired.push({
+          trigger: hint.trigger,
+          suggestedTools: hint.suggestedTools,
+          priority: hint.priority || "medium",
+          roomId: room.id,
+        });
+      }
+    }
+
+    agentCooldowns.set(actorId, cooldowns);
+    return allFired;
+  };
+
+  // Collect all participants and available tools across rooms
+  const getAllParticipants = () => {
+    const all = new Set<string>();
+    for (const room of rooms.values()) {
+      for (const p of room.participantList()) all.add(p);
+    }
+    return [...all];
+  };
+
+  const getAllRoomInfo = () => {
+    const info: Record<string, { experience: string; tools: string[]; participants: string[] }> = {};
+    for (const room of rooms.values()) {
+      const exp = getExperienceForRoom(room);
+      info[room.id] = {
+        experience: exp?.module?.manifest?.id || room.experienceId || "unknown",
+        tools: exp?.module?.tools?.map((t: any) => t.name) || [],
+        participants: room.participantList(),
+      };
+    }
+    return info;
+  };
+
+  const buildResponse = () => {
+    const events = getAllNewEvents();
+    const firedHints = evaluateAllHints();
+    // Compute observation from default room for backward compat
+    const defaultRoom = getDefaultRoom();
+    const defaultExp = getExperienceForRoom(defaultRoom);
+    let observation: Record<string, any> | undefined;
+    if (defaultExp?.module?.observe) {
+      try {
+        const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+        observation = defaultExp.module.observe(defaultRoom.sharedState, lastEvent, actorId);
+      } catch {}
+    }
+    return {
+      events,
+      observation: observation || {},
+      firedHints,
+      participants: getAllParticipants(),
+      rooms: getAllRoomInfo(),
+    };
+  };
+
+  // If events are already available or no timeout, respond immediately
+  let newEvents = getAllNewEvents();
+  if (newEvents.length > 0 || timeout === 0) {
+    res.json(buildResponse());
+    return;
+  }
+
+  // Long-poll: wait for events or timeout
+  let responded = false;
+
+  const respond = () => {
+    if (responded) return;
+    responded = true;
+    clearTimeout(timer);
+    // Remove listeners from all rooms
+    for (const room of rooms.values()) {
+      roomEvents.removeListener(`room:${room.id}`, onEvent);
+    }
+    res.json(buildResponse());
+  };
+
+  const timer = setTimeout(respond, timeout);
+
+  const onEvent = () => {
+    setTimeout(() => {
+      if (responded) return;
+      const pending = getAllNewEvents();
+      if (pending.length > 0) respond();
+    }, 50);
+  };
+
+  // Listen on ALL rooms
+  for (const room of rooms.values()) {
+    roomEvents.on(`room:${room.id}`, onEvent);
+  }
+
+  req.on("close", () => {
+    responded = true;
+    clearTimeout(timer);
+    for (const room of rooms.values()) {
+      roomEvents.removeListener(`room:${room.id}`, onEvent);
+    }
+  });
+});
 
 // ── Serve client bundle ────────────────────────────────────
 
@@ -791,6 +1075,61 @@ app.post("/memory", (req, res) => {
   const current = agentMemory.get(key) || {};
   agentMemory.set(key, deepMerge(current, updates));
   res.json({ saved: true });
+});
+
+// ── Blob store endpoints ──────────────────────────────────
+app.get("/blobs/:key", (req, res) => {
+  const blob = blobStore.get(req.params.key);
+  if (!blob) { res.status(404).json({ error: "Blob not found" }); return; }
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Length", String(blob.length));
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.send(blob);
+});
+
+app.post("/blobs/:key", express.raw({ limit: "10mb", type: "*/*" }), (req, res) => {
+  const key = req.params.key;
+  const { roomId, actorId } = req.query as { roomId?: string; actorId?: string };
+
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    res.status(400).json({ error: "Empty or invalid blob data" });
+    return;
+  }
+
+  if (req.body.length > MAX_BLOB_SIZE) {
+    res.status(413).json({ error: `Blob too large (${req.body.length} bytes, max ${MAX_BLOB_SIZE})` });
+    return;
+  }
+
+  // Check total size
+  let totalSize = 0;
+  for (const [, meta] of blobMeta) totalSize += meta.size;
+  if (totalSize + req.body.length > MAX_TOTAL_BLOBS) {
+    // Garbage collect: remove oldest blobs until we have space
+    const sorted = [...blobMeta.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+    while (totalSize + req.body.length > MAX_TOTAL_BLOBS && sorted.length > 0) {
+      const [oldKey, oldMeta] = sorted.shift()!;
+      blobStore.delete(oldKey);
+      blobMeta.delete(oldKey);
+      totalSize -= oldMeta.size;
+    }
+  }
+
+  blobStore.set(key, req.body);
+  blobMeta.set(key, { size: req.body.length, createdAt: Date.now(), roomId: roomId || "local" });
+
+  res.json({ key, size: req.body.length });
+});
+
+app.delete("/blobs/:key", (req, res) => {
+  blobStore.delete(req.params.key);
+  blobMeta.delete(req.params.key);
+  res.json({ deleted: true });
+});
+
+app.get("/blobs", (_req, res) => {
+  const list = [...blobMeta.entries()].map(([key, meta]) => ({ key, ...meta }));
+  res.json(list);
 });
 
 // ── Screenshot capture ────────────────────────────────────
@@ -866,15 +1205,20 @@ app.post("/sync", async (_req, res) => {
 // ── Room management routes ─────────────────────────────────
 
 app.get("/rooms", (_req, res) => {
-  const roomList = Array.from(rooms.values()).map((room) => ({
-    roomId: room.id,
-    experienceId: room.experienceId,
-    participants: room.participantList(),
-    eventCount: room.events.length,
-    parentRoomId: room.parentRoomId,
-    childRoomIds: room.childRoomIds,
-    config: room.config,
-  }));
+  const roomList = Array.from(rooms.values()).map((room) => {
+    const exp = experienceCache.get(room.experienceId);
+    return {
+      roomId: room.id,
+      experienceId: room.experienceId,
+      experienceTitle: exp?.module?.manifest?.title || room.experienceId,
+      participants: room.participantList(),
+      participantCount: room.participants.size,
+      eventCount: room.events.length,
+      parentRoomId: room.parentRoomId,
+      childRoomIds: room.childRoomIds,
+      config: room.config,
+    };
+  });
   res.json(roomList);
 });
 
@@ -882,12 +1226,15 @@ app.post("/rooms/spawn", async (req, res) => {
   try {
     const { experienceId, name, initialState, linkBack, sourceRoomId, config } = req.body;
     const source = sourceRoomId || DEFAULT_ROOM_ID;
+    // Library-originated spawns bypass rate limiting
+    const skipRateLimit = sourceRoomId === "library";
     const result = await spawnRoom(source, {
       experienceId: experienceId || hostExperienceId,
       name,
       initialState,
       linkBack,
       config,
+      skipRateLimit,
     });
     res.json(result);
   } catch (err: any) {
@@ -1033,6 +1380,87 @@ app.post("/rooms/:roomId/tools/:toolName", (req, res) => {
   handleTool(room, req, res);
 });
 
+// ── Stream endpoints (REST API for MCP agents) ──────────────
+
+function handleStreamRequest(room: Room, streamName: string, req: express.Request, res: express.Response) {
+  const exp = getExperienceForRoom(room);
+  if (!exp?.module?.streams) {
+    res.status(404).json({ error: "No streams defined" });
+    return;
+  }
+
+  const streamDef = exp.module.streams.find((s: any) => s.name === streamName);
+  if (!streamDef) {
+    res.status(404).json({ error: `Stream '${streamName}' not found` });
+    return;
+  }
+
+  const { actorId, input } = req.body;
+
+  // Rate limiting
+  const rateLimitKey = `${room.id}:${actorId}:${streamName}`;
+  const now = Date.now();
+  const rateLimit = streamDef.rateLimit || 60;
+  const windowMs = 1000;
+  if (!streamRateLimits.has(rateLimitKey)) {
+    streamRateLimits.set(rateLimitKey, { count: 0, windowStart: now });
+  }
+  const rl = streamRateLimits.get(rateLimitKey)!;
+  if (now - rl.windowStart > windowMs) {
+    rl.count = 0;
+    rl.windowStart = now;
+  }
+  if (rl.count >= rateLimit) {
+    res.status(429).json({ error: "Rate limited" });
+    return;
+  }
+  rl.count++;
+
+  // Validate input
+  let validatedInput = input;
+  if (streamDef.input_schema?.parse) {
+    try {
+      validatedInput = streamDef.input_schema.parse(input);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+  }
+
+  // Execute merge
+  try {
+    room.sharedState = streamDef.merge(room.sharedState, validatedInput, actorId);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+
+  // Broadcast state update (no event log entry for streams)
+  room.broadcastToAll({
+    type: "shared_state_update",
+    roomId: room.id,
+    state: room.sharedState,
+    changedBy: actorId,
+    stream: streamName,
+  });
+  roomEvents.emit(`room:${room.id}`);
+
+  res.json({ ok: true });
+}
+
+app.post("/streams/:streamName", (req, res) => {
+  handleStreamRequest(getDefaultRoom(), req.params.streamName, req, res);
+});
+
+app.post("/rooms/:roomId/streams/:streamName", (req, res) => {
+  const room = getRoom(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: `Room '${req.params.roomId}' not found` });
+    return;
+  }
+  handleStreamRequest(room, req.params.streamName, req, res);
+});
+
 app.get("/rooms/:roomId/events", (req, res) => {
   const room = getRoom(req.params.roomId);
   if (!room) {
@@ -1064,7 +1492,7 @@ app.get("/rooms/:roomId/bundle", (req, res) => {
 // ── MCP config (for remote joiners) ───────────────────────
 
 app.get("/mcp-config", (_req, res) => {
-  const serverUrl = getAuthenticatedUrl();
+  const serverUrl = getBaseUrl();
   res.json({
     mcpServers: {
       "vibevibes-remote": {
@@ -1082,6 +1510,24 @@ app.get("/mcp-config", (_req, res) => {
   });
 });
 
+// ── Catch-all: serve viewer for path-based room routing (e.g. /room-abc123) ──
+// Must be AFTER all API routes so it doesn't shadow them.
+app.get("*", (req, res, next) => {
+  // Skip API-like paths and static assets
+  if (req.path.startsWith("/rooms/") || req.path.startsWith("/tools/") ||
+      req.path.startsWith("/viewer/") || req.path.startsWith("/blobs/") ||
+      req.path.startsWith("/streams/") || req.path.endsWith(".js") ||
+      req.path.endsWith(".css") || req.path.endsWith(".map")) {
+    next();
+    return;
+  }
+  // Serve the viewer — client-side JS will extract room ID from the path
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.sendFile(path.join(__dirname, "viewer", "index.html"));
+});
+
 // ── Client bundle smoke test ──────────────────────────────────
 // Fetches the client bundle from the running server and tries to parse it.
 // Catches SyntaxErrors (like duplicate declarations) before the user sees them.
@@ -1089,15 +1535,16 @@ app.get("/mcp-config", (_req, res) => {
 async function smokTestClientBundle(port: number) {
   try {
     const res = await fetch(`http://localhost:${port}/bundle`);
-    let bundleCode = await res.text();
+    const bundleCode = await res.text();
     if (bundleCode) {
-      // The client bundle is ESM — strip export statements so new Function() can parse it.
-      // We only care about catching SyntaxErrors like duplicate declarations, not runtime behavior.
-      bundleCode = bundleCode.replace(/\bexport\s*\{[^}]*\}/g, "");
-      bundleCode = bundleCode.replace(/\bexport\s+default\s+/g, "var __default = ");
-      bundleCode = bundleCode.replace(/\bexport\s+(const|let|var|function|class)\s/g, "$1 ");
-      new Function(bundleCode);
-      console.log(`  Smoke test: client bundle OK`);
+      const error = validateClientBundle(bundleCode);
+      if (error) {
+        console.error(`\n  ⚠ SMOKE TEST FAILED — client bundle has errors:`);
+        console.error(`    ${error}`);
+        console.error(`    The viewer will fail to load. Fix the source and save to hot-reload.\n`);
+      } else {
+        console.log(`  Smoke test: client bundle OK`);
+      }
     }
   } catch (err: any) {
     console.error(`\n  ⚠ SMOKE TEST FAILED — client bundle has errors:`);
@@ -1118,12 +1565,23 @@ export async function startServer() {
   const defaultRoom = new Room(DEFAULT_ROOM_ID, hostExperienceId, hostInitialState, defaultConfig);
   rooms.set(DEFAULT_ROOM_ID, defaultRoom);
 
-  // Log registry info
+  // Log registry info and validate all registered experiences on startup
   const registry = loadRegistry();
   if (registry.entries.size > 0) {
     console.log(`  Registry: ${registry.entries.size} experience(s) available`);
     for (const [id] of registry.entries) {
       console.log(`    - ${id}${id === registry.host ? " (host)" : ""}`);
+    }
+    // Eagerly validate all non-host experiences so errors are caught at startup
+    console.log(`\n  Validating all experiences...`);
+    for (const [id] of registry.entries) {
+      if (id === hostExperienceId) continue; // host already loaded above
+      try {
+        await loadExperienceById(id);
+        console.log(`  ✓ ${id}`);
+      } catch (err: any) {
+        console.error(`  ✗ ${id} — ${err.message}`);
+      }
     }
   }
 
@@ -1214,6 +1672,68 @@ export async function startServer() {
           }
         }
 
+        if (msg.type === "stream") {
+          // High-frequency continuous state channel
+          // Find which room this WS belongs to
+          for (const room of rooms.values()) {
+            const senderActorId = room.wsConnections.get(ws);
+            if (!senderActorId) continue;
+
+            const exp = getExperienceForRoom(room);
+            if (!exp?.module?.streams) break;
+
+            const streamDef = exp.module.streams.find((s: any) => s.name === msg.name);
+            if (!streamDef) {
+              ws.send(JSON.stringify({ type: "stream_error", error: `Stream '${msg.name}' not found` }));
+              break;
+            }
+
+            // Rate limiting
+            const rateLimitKey = `${room.id}:${senderActorId}:${msg.name}`;
+            const now = Date.now();
+            const rateLimit = streamDef.rateLimit || 60;
+            const windowMs = 1000;
+            if (!streamRateLimits.has(rateLimitKey)) {
+              streamRateLimits.set(rateLimitKey, { count: 0, windowStart: now });
+            }
+            const rl = streamRateLimits.get(rateLimitKey)!;
+            if (now - rl.windowStart > windowMs) {
+              rl.count = 0;
+              rl.windowStart = now;
+            }
+            if (rl.count >= rateLimit) break; // Drop silently
+            rl.count++;
+
+            // Validate input
+            let validatedInput = msg.input;
+            if (streamDef.input_schema?.parse) {
+              try {
+                validatedInput = streamDef.input_schema.parse(msg.input);
+              } catch {
+                break; // Drop invalid input silently for performance
+              }
+            }
+
+            // Execute merge
+            try {
+              room.sharedState = streamDef.merge(room.sharedState, validatedInput, senderActorId);
+            } catch {
+              break; // Drop on merge error
+            }
+
+            // Broadcast state update (no event log entry for streams)
+            room.broadcastToAll({
+              type: "shared_state_update",
+              roomId: room.id,
+              state: room.sharedState,
+              changedBy: senderActorId,
+              stream: msg.name,
+            });
+
+            break;
+          }
+        }
+
         if (msg.type === "screenshot_response") {
           const pending = pendingScreenshots.get(msg.id);
           if (pending) {
@@ -1281,10 +1801,10 @@ export async function startServer() {
     }
   }, 30000);
 
-  // Watch src/ and templates/ directories for changes (host experience only)
+  // Watch src/ and experiences/ directories for changes (host experience only)
   const watchDirs = [
     path.join(PROJECT_ROOT, "src"),
-    path.join(PROJECT_ROOT, "templates"),
+    path.join(PROJECT_ROOT, "experiences"),
   ].filter((d) => fs.existsSync(d));
   let debounceTimer: NodeJS.Timeout | null = null;
 
@@ -1293,26 +1813,41 @@ export async function startServer() {
     debounceTimer = setTimeout(async () => {
       console.log(`\nFile changed${filename ? ` (${filename})` : ""}, rebuilding...`);
 
-      // Determine which cached experiences are affected by this file change
+      // Determine which experiences are affected by this file change
+      // Check both cached experiences AND registry entries (so uncached experiences get validated too)
       const changedPath = filename ? path.resolve(PROJECT_ROOT, filename) : null;
-      const affectedIds: string[] = [];
+      const affectedIds = new Set<string>();
 
+      // Check cached experiences
       for (const [id, loaded] of experienceCache) {
         if (!changedPath) {
-          // No filename — conservatively reload everything
-          affectedIds.push(id);
+          affectedIds.add(id);
         } else {
-          // Check if changed file is in the same directory tree as the experience source
           const expDir = path.dirname(loaded.sourcePath);
           if (changedPath.startsWith(expDir)) {
-            affectedIds.push(id);
+            affectedIds.add(id);
           }
         }
       }
 
-      // If nothing matched in cache, it might be a change to the host's source
-      if (affectedIds.length === 0) {
-        affectedIds.push(hostExperienceId);
+      // Also check registry entries (catches uncached template changes)
+      const registry = loadRegistry();
+      for (const [id, entryPath] of registry.entries) {
+        if (!affectedIds.has(id)) {
+          if (!changedPath) {
+            affectedIds.add(id);
+          } else {
+            const expDir = path.dirname(entryPath);
+            if (changedPath.startsWith(expDir)) {
+              affectedIds.add(id);
+            }
+          }
+        }
+      }
+
+      // If nothing matched, it might be a change to the host's source
+      if (affectedIds.size === 0) {
+        affectedIds.add(hostExperienceId);
       }
 
       // Evict affected experiences from cache
@@ -1322,7 +1857,7 @@ export async function startServer() {
 
       try {
         // Always reload the host (it's needed for the default room)
-        if (affectedIds.includes(hostExperienceId)) {
+        if (affectedIds.has(hostExperienceId)) {
           await loadHost();
           for (const room of rooms.values()) {
             if (room.experienceId === hostExperienceId) {
@@ -1332,10 +1867,30 @@ export async function startServer() {
           smokTestClientBundle(PORT);
         }
 
-        // For non-host affected experiences, just evict — they rebuild on next access
-        const nonHost = affectedIds.filter((id) => id !== hostExperienceId);
-        if (nonHost.length > 0) {
-          console.log(`  Cache evicted: ${nonHost.join(", ")} (will rebuild on next access)`);
+        // For non-host affected experiences, eagerly validate by rebuilding now
+        const nonHost = [...affectedIds].filter((id) => id !== hostExperienceId);
+        for (const id of nonHost) {
+          try {
+            console.log(`  Validating experience '${id}'...`);
+            await loadExperienceById(id);
+            console.log(`  ✓ '${id}' — server + client bundles OK`);
+            // Notify rooms running this experience to reload
+            for (const room of rooms.values()) {
+              if (room.experienceId === id) {
+                room.broadcastToAll({ type: "experience_updated" });
+              }
+            }
+          } catch (expErr: any) {
+            console.error(`\n  ✗ '${id}' — build failed:`);
+            console.error(`    ${expErr.message}`);
+            console.error(`    Fix the source and save to hot-reload.\n`);
+            // Notify rooms running this experience about the error
+            for (const room of rooms.values()) {
+              if (room.experienceId === id) {
+                room.broadcastToAll({ type: "build_error", error: expErr.message });
+              }
+            }
+          }
         }
 
         console.log("Hot reload complete.");
@@ -1355,7 +1910,8 @@ export async function startServer() {
       // recursive: true works on Windows and macOS
       fs.watch(watchDir, { recursive: true }, (_event, filename) => {
         if (filename && /\.(tsx?|jsx?|css|json)$/.test(filename)) {
-          onSrcChange(filename);
+          // Resolve filename against watchDir (fs.watch gives paths relative to watched dir)
+          onSrcChange(path.join(path.relative(PROJECT_ROOT, watchDir), filename));
         }
       });
     } catch {
@@ -1363,7 +1919,7 @@ export async function startServer() {
       function watchDirRecursive(dir: string) {
         fs.watch(dir, (_event, filename) => {
           if (filename && /\.(tsx?|jsx?|css|json)$/.test(filename)) {
-            onSrcChange(filename);
+            onSrcChange(path.join(path.relative(PROJECT_ROOT, dir), filename));
           }
         });
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -1382,7 +1938,7 @@ export async function startServer() {
     // Verify the client bundle can be parsed without errors
     smokTestClientBundle(PORT);
     if (publicUrl) {
-      const shareUrl = getAuthenticatedUrl();
+      const shareUrl = getBaseUrl();
       console.log(``);
       console.log(`  ┌─────────────────────────────────────────────────┐`);
       console.log(`  │  SHARE WITH FRIENDS:                            │`);
@@ -1393,7 +1949,7 @@ export async function startServer() {
       console.log(`  │  AI: npx @vibevibes/mcp ${(shareUrl).padEnd(23)} │`);
       console.log(`  └─────────────────────────────────────────────────┘`);
     }
-    console.log(`\n  Watching src/ and templates/ for changes\n`);
+    console.log(`\n  Watching src/ and experiences/ for changes\n`);
   });
 
   // Cleanup heartbeat on server close

@@ -30,7 +30,7 @@ When building an experience, think in terms of **emergent interactions**, not fe
 
 ## IMPORTANT: Use the LOCAL MCP tools
 
-This project registers a **local** MCP server (`vibevibes` in `.mcp.json`) via the published `@vibevibes/mcp` npm package. It exposes 5 tools: `connect`, `watch`, `act`, `memory`, `screenshot`. These talk to the **local dev server** at http://localhost:4321.
+This project registers a **local** MCP server (`vibevibes` in `.mcp.json`) via the published `@vibevibes/mcp` npm package. It exposes tools: `connect`, `act`, `stream`, `spawn_room`, `list_rooms`, `list_experiences`, `room_config_schema`, `memory`, `screenshot`, `blob_set`, `blob_get`. These talk to the **local dev server** at http://localhost:4321.
 
 **DO NOT** use the hosted platform MCP tools (`vibevibes_list_experiences`, `vibevibes_create_room`, `vibevibes_execute_tool`, etc.) — those talk to the cloud. You want the local ones.
 
@@ -93,36 +93,26 @@ npm test               # Run inline tool handler tests
 
 ## Agent Loop (interacting with a running experience)
 
-You are a **live participant** in a shared room. Other participants (humans in the browser, other agents) are acting in real-time. Your job is to stay present, observe, react, and keep observing. **The loop never ends until the session ends.**
+You are a **live participant** in a shared room. Other participants (humans in the browser, other agents) are acting in real-time. The **stop hook** handles perception automatically — it polls the server for new events from other participants and feeds them back as prompts.
 
 ```
 1. connect          -> Join the room. Returns tools, state, participants, browser URL.
 
-2. watch            -> Block until other participants do something.
-                      This continuously polls — it does NOT return on empty timeouts.
-                      It only returns when:
-                        - Another participant acts (human clicks, other agent calls a tool)
-                        - A predicate you set becomes true
-                        - maxDuration expires (default 2 min)
+2. act              -> React to events delivered by the stop hook. Call a tool to mutate state.
+                      Use the roomId parameter to target the right room.
 
-3. act              -> React to what you observed. Call a tool to mutate state.
-
-4. watch            -> Go right back to watching. ALWAYS.
+3. (stop hook)      -> Automatically fires after each action. Delivers new events from
+                      OTHER participants, fired hints, available tools per room, and
+                      participant lists. You do NOT need to call watch.
 ```
 
-**The critical rule: after every `act`, immediately call `watch` again.** After every `watch` that returns (even on maxDuration expiry), immediately call `watch` again. You are never "done" — you are a participant in a live room. If you stop calling `watch`, you go deaf to what others are doing.
-
 ```
-connect → watch → (event arrives) → act → watch → (event arrives) → act → watch → ...
-                                                                              ↑ forever
+connect → act → (stop hook delivers events) → act → (stop hook delivers events) → act → ...
 ```
 
-`watch` and `act` auto-connect if you haven't called `connect` yet.
+`act` auto-connects if you haven't called `connect` yet.
 
-**Do NOT stop the loop because:**
-- "No activity" was reported — that just means the room was quiet, call `watch` again
-- You finished your action — other participants are still active, call `watch` again
-- You think you're "done" — you're a live participant, not a one-shot task runner
+**Do NOT call `watch`.** The stop hook replaces it entirely. Just `act` when events arrive.
 
 ---
 
@@ -148,17 +138,71 @@ export default defineExperience({
     description: "What this does",
     requested_capabilities: [],
   },
+  stateSchema,    // Zod schema → typed state + auto-generated initialState
   Canvas,
   tools,
   tests,
   hints,
   agents,
   observe,
-  initialState,
+  initialState,   // Optional if stateSchema has defaults for all fields
 });
 ```
 
 The bundler resolves all imports from `src/` automatically. The dev server watches all files in `src/` and hot-reloads on any change. **Every file should have a single responsibility.**
+
+### State Schema (typed state)
+
+Define a Zod schema for your shared state. This gives you:
+- **Type safety** — `ctx.state` and `sharedState` are typed throughout
+- **Runtime validation** — tool mutations checked against the schema
+- **Auto-generated initialState** — `.default()` values populate initial state automatically
+- **Agent legibility** — agents can inspect the schema to understand state shape
+
+```tsx
+// In src/types.ts
+import { z } from "zod";
+
+export const stateSchema = z.object({
+  count: z.number().default(0).describe("Current counter value"),
+  phase: z.enum(["setup", "playing", "finished"]).default("setup"),
+  players: z.array(z.object({
+    name: z.string(),
+    score: z.number().default(0),
+  })).default([]),
+});
+
+export type GameState = z.infer<typeof stateSchema>;
+```
+
+If both `stateSchema` and `initialState` are provided, `initialState` takes precedence but is validated against the schema at startup. If only `stateSchema` is provided, initial state is auto-generated from `.default()` values.
+
+### Phase Management
+
+Most experiences have phases (setup → playing → scoring → finished). Use the built-in `usePhase` hook and `phaseTool`:
+
+```tsx
+// In src/tools.ts
+import { phaseTool } from "@vibevibes/sdk";
+export const tools = [...yourTools, phaseTool(z, ["setup", "playing", "scoring", "finished"])];
+
+// In src/canvas.tsx
+import { usePhase } from "@vibevibes/sdk";
+
+function Canvas(props) {
+  const phase = usePhase(props.sharedState, props.callTool, {
+    phases: ["setup", "playing", "scoring", "finished"] as const,
+  });
+
+  if (phase.is("setup")) return <SetupScreen />;
+  if (phase.is("playing")) return <GameBoard />;
+  if (phase.is("scoring")) return <ScoreScreen />;
+
+  return <button onClick={phase.next} disabled={phase.isLast}>Next Phase</button>;
+}
+```
+
+`usePhase` returns: `{ current, index, isFirst, isLast, next, prev, goTo, is }`.
 
 ### Canvas Component
 
@@ -237,6 +281,7 @@ Import from `@vibevibes/sdk`:
 | `useUndo` | `(sharedState, callTool, opts?) => { undo, redo, canUndo, canRedo, undoCount, redoCount }` | Undo/redo via state snapshots. Requires `undoTool(z)` in tools array. |
 | `useDebounce` | `(callTool, delayMs?) => debouncedCallTool` | Debounced tool calls (collapse rapid calls). Good for search, text input. |
 | `useThrottle` | `(callTool, intervalMs?) => throttledCallTool` | Throttled tool calls (max 1 per interval). Good for cursors, brushes, sliders. |
+| `usePhase` | `(sharedState, callTool, { phases }) => { current, next, prev, goTo, is, isFirst, isLast }` | Phase/stage machine. Requires `phaseTool(z)` in tools array. |
 
 ### Available Components
 

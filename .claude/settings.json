@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/stop-hook.js",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

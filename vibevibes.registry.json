@@ -1,8 +1,32 @@
 {
-  "host": "the-sandbox",
+  "host": "experience-library",
   "experiences": {
+    "experience-library": {
+      "path": "./src/index.tsx"
+    },
+    "collaborative-paint": {
+      "path": "./experiences/collaborative-paint/index.tsx"
+    },
     "the-sandbox": {
-      "path": "./templates/the-sandbox/index.tsx"
+      "path": "./experiences/the-sandbox/index.tsx"
+    },
+    "card-game": {
+      "path": "./experiences/card-game/index.tsx"
+    },
+    "dashboard": {
+      "path": "./experiences/dashboard/index.tsx"
+    },
+    "dungeon-crawl": {
+      "path": "./experiences/dungeon-crawl/index.tsx"
+    },
+    "music-jam": {
+      "path": "./experiences/music-jam/index.tsx"
+    },
+    "story-engine": {
+      "path": "./experiences/story-engine/index.tsx"
+    },
+    "two-teams": {
+      "path": "./experiences/two-teams/index.tsx"
     }
   }
 }

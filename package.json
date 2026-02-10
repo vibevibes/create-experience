@@ -7,8 +7,8 @@
     "create-experience": "./bin/create.js"
   },
   "scripts": {
-    "dev": "tsx scripts/dev.ts",
-    "dev:share": "tsx scripts/dev.ts --share",
+    "dev": "tsx --env-file=.env scripts/dev.ts",
+    "dev:share": "tsx --env-file=.env scripts/dev.ts --share",
     "build": "tsx runtime/bundler.ts",
     "test": "tsx scripts/test.ts"
   },
@@ -20,6 +20,7 @@
     "src",
     "runtime",
     "scripts",
+    "experiences",
     "templates",
     "tsconfig.json",
     "CLAUDE.md"
