@@ -12,7 +12,7 @@ Answer these three questions first. Write them as comments at the top of `src/in
 2. **The loop:** Human does X → Agent responds with Y → Human builds on it → ... What's the core interaction cycle?
 3. **The surprise:** What does the agent do that the human didn't expect? Where does emergence live?
 
-These answers are your creative north star. Every tool, component, and hint you write should serve the loop.
+These answers are your creative north star. Every tool, component, and observe function you write should serve the loop.
 
 ---
 
@@ -23,7 +23,7 @@ When building an experience, think in terms of **emergent interactions**, not fe
 - **Asymmetry is the point.** What can the human do that the agent can't? What can the agent do that the human can't? Where do those differences create something neither could make alone?
 - **Start with one compelling interaction loop**, not a feature list. A drawing app where the AI colorizes your sketches > a drawing app with 20 brush tools.
 - **State is the shared imagination.** Design your state shape to be *legible to the agent* — flat keys, descriptive names, meaningful values. An agent reasons about `{ mood: "tense", threatLevel: 3 }` better than `{ m: 2, tl: 3 }`.
-- **Agent hints are your creative direction.** Use them to make the agent *surprising* — hints that fire on unexpected conditions create the moments humans share with friends.
+- **The observe function is your creative direction.** Use it to shape how the agent perceives the world — give it mood, narrative, and high-level concepts instead of raw state.
 - **Let the agent be an author, not a servant.** The best experiences give the agent creative latitude. Don't micromanage every response — give it a role and let it surprise you.
 
 ---
@@ -44,7 +44,7 @@ src/                   <- YOUR EXPERIENCE CODE
   tools.ts             <- Tool definitions (defineTool, quickTool, tool factories)
   canvas.tsx           <- Canvas component and sub-components
   components.tsx       <- Reusable UI components and custom hooks
-  agent.ts             <- Agent system prompt, hints, slots
+  agent.ts             <- Agent system prompt, observe function, slots
   types.ts             <- TypeScript types and Zod schemas
   utils.ts             <- Pure helper functions, constants
   tests.ts             <- All defineTest definitions
@@ -66,7 +66,7 @@ runtime/               <- Local dev runtime. Don't modify.
 | `src/tools.ts` | All `defineTool` / `quickTool` definitions, tool factory functions | `tools` array |
 | `src/canvas.tsx` | The `Canvas` component, sub-components it renders | `Canvas` component |
 | `src/components.tsx` | Reusable UI components, custom hooks | Named exports |
-| `src/agent.ts` | System prompt string, agent hints array, agent slot configs | `SYSTEM_PROMPT`, `hints`, `agents` |
+| `src/agent.ts` | System prompt string, observe function, agent slot configs | `SYSTEM_PROMPT`, `observe`, `agents` |
 | `src/types.ts` | TypeScript types, Zod schemas, interfaces | Type exports |
 | `src/utils.ts` | Pure helper functions, constants, config values | Named exports |
 | `src/tests.ts` | All `defineTest` definitions | `tests` array |
@@ -102,17 +102,14 @@ You are a **live participant** in a shared room. Other participants (humans in t
                       Use the roomId parameter to target the right room.
 
 3. (stop hook)      -> Automatically fires after each action. Delivers new events from
-                      OTHER participants, fired hints, available tools per room, and
-                      participant lists. You do NOT need to call watch.
+                      OTHER participants, available tools per room, and participant lists.
 ```
 
 ```
 connect → act → (stop hook delivers events) → act → (stop hook delivers events) → act → ...
 ```
 
-`act` auto-connects if you haven't called `connect` yet.
-
-**Do NOT call `watch`.** The stop hook replaces it entirely. Just `act` when events arrive.
+`connect` reads identity from the state file written by `/vibevibes-join`. Just `act` when events arrive.
 
 ---
 
@@ -126,8 +123,7 @@ import { defineExperience } from "@vibevibes/sdk";
 import { Canvas } from "./canvas";
 import { tools } from "./tools";
 import { tests } from "./tests";
-import { SYSTEM_PROMPT, hints, agents } from "./agent";
-import { observe } from "./agent";
+import { SYSTEM_PROMPT, observe, agents } from "./agent";
 import { initialState } from "./utils";
 
 export default defineExperience({
@@ -142,7 +138,6 @@ export default defineExperience({
   Canvas,
   tools,
   tests,
-  hints,
   agents,
   observe,
   initialState,   // Optional if stateSchema has defaults for all fields
@@ -332,20 +327,6 @@ manifest: {
     }
   ]
 }
-```
-
-### Agent Hints (guide agent behavior)
-
-```tsx
-agentHints: [
-  {
-    trigger: "when a new region is explored",
-    condition: "state.regions?.some(r => r.explored)",
-    suggestedTools: ["world.add_creature", "world.add_lore"],
-    priority: "medium",
-    cooldownMs: 1000,
-  }
-]
 ```
 
 ### Observe Function (curate what agents see)
