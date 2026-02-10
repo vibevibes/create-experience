@@ -3,53 +3,6 @@
  * No I/O, no HTTP, no file system — just functions.
  */
 
-const DEFAULT_COOLDOWN_MS = 5000;
-
-/**
- * Evaluate agent hints against current state.
- * Returns hints whose conditions match and aren't on cooldown.
- *
- * @param {Record<string,any>} state - Current shared state
- * @param {Array} hints - Agent hint definitions from the experience
- * @param {string} actorId - The agent's actor ID
- * @param {Record<string,number>} cooldowns - Map of trigger→lastFiredTimestamp (mutated in place)
- * @returns {Array<{trigger,suggestedTools,priority,firedAt}>}
- */
-export function evaluateHints(state, hints, actorId, cooldowns) {
-  if (!hints || hints.length === 0) return [];
-
-  const fired = [];
-  const now = Date.now();
-
-  for (const hint of hints) {
-    // Check cooldown
-    const lastFired = cooldowns[hint.trigger] || 0;
-    const cooldownMs = hint.cooldownMs || DEFAULT_COOLDOWN_MS;
-    if (now - lastFired < cooldownMs) continue;
-
-    // Evaluate condition
-    if (hint.condition) {
-      try {
-        const fn = new Function("state", "actorId", `return ${hint.condition}`);
-        if (!fn(state, actorId)) continue;
-      } catch {
-        continue; // Invalid expression — skip silently
-      }
-    }
-
-    // Hint fires
-    cooldowns[hint.trigger] = now;
-    fired.push({
-      trigger: hint.trigger,
-      suggestedTools: hint.suggestedTools,
-      priority: hint.priority || "medium",
-      firedAt: now,
-    });
-  }
-
-  return fired;
-}
-
 /**
  * Format an agent context into a readable prompt string.
  * This is what Claude sees as the "reason" when the Stop hook blocks exit.
@@ -57,7 +10,6 @@ export function evaluateHints(state, hints, actorId, cooldowns) {
  * @param {object} ctx - Agent context from the server
  * @param {Array} ctx.events - Events since last interaction
  * @param {object|null} ctx.observation - Curated state from observe()
- * @param {Array} ctx.firedHints - Hints that fired
  * @param {string[]} ctx.participants - Current participant IDs
  * @returns {string}
  */
@@ -80,17 +32,6 @@ export function formatPrompt(ctx) {
     parts.push(`Observation: ${JSON.stringify(ctx.observation)}`);
   }
 
-  // Fired hints
-  if (ctx.firedHints && ctx.firedHints.length > 0) {
-    parts.push("");
-    parts.push("Hints firing:");
-    for (const h of ctx.firedHints) {
-      parts.push(
-        `  [${h.priority}] ${h.trigger} -> try: ${h.suggestedTools.join(", ")}`
-      );
-    }
-  }
-
   // Participants
   if (ctx.participants && ctx.participants.length > 0) {
     const names = ctx.participants.map((p) => p.split("-")[0]);
@@ -101,7 +42,7 @@ export function formatPrompt(ctx) {
   // Instruction
   parts.push("");
   parts.push(
-    "React to the events above using the experience's tools via the act MCP tool. Stay in character."
+    "New activity in the experience. Use the act MCP tool with roomId to respond in the right room. If nothing requires a response, you may observe without acting."
   );
 
   return parts.join("\n");
@@ -120,10 +61,9 @@ export function makeDecision(ctx, iteration) {
   if (ctx === null) return null;
 
   const hasEvents = ctx.events && ctx.events.length > 0;
-  const hasHints = ctx.firedHints && ctx.firedHints.length > 0;
 
   // Nothing to react to — allow exit silently (zero wasted tokens)
-  if (!hasEvents && !hasHints) return null;
+  if (!hasEvents) return null;
 
   const reason = formatPrompt(ctx);
   const iter = iteration || 0;

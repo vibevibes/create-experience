@@ -16,7 +16,7 @@ import { defineExperience } from "@vibevibes/sdk";
 import { Canvas } from "./canvas";
 import { tools } from "./tools";
 import { tests } from "./tests";
-import { hints, agents, observe } from "./agent";
+import { agents, observe } from "./agent";
 import { stateSchema, GRID_SIZE } from "./types";
 import type { Tile } from "./types";
 
@@ -73,7 +73,6 @@ export default defineExperience({
   Canvas,
   tools,
   tests,
-  hints,
   agents,
   observe,
 });

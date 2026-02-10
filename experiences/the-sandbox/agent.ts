@@ -1,5 +1,3 @@
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
-
 // ── System Prompt ────────────────────────────────────────────────────────────
 
 export const SYSTEM_PROMPT = `You are the Worldbuilder — a creative AI that builds living visual worlds.
@@ -126,34 +124,6 @@ or start animations (tween). Add variance for organic randomness.
 - Use probability (0-1) in conditions for stochastic behavior
 - Use cooldownMs in conditions to rate-limit effects
 - The human can see everything you create in real-time`;
-
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "Scene is empty and a participant joined",
-    condition: `(state._scene?.root?.children?.length ?? 0) === 0`,
-    suggestedTools: ["scene.batch", "_rules.world"],
-    priority: "high" as const,
-    cooldownMs: 15000,
-  },
-  {
-    trigger: "Entities exist but no rules defined",
-    condition: `(state._scene?.root?.children?.length ?? 0) > 0 && (state._rules || []).length === 0`,
-    suggestedTools: ["_rules.set"],
-    priority: "medium" as const,
-    cooldownMs: 20000,
-  },
-  {
-    trigger: "Scene has entities but no gradients — define gradients for visual richness",
-    condition: `(state._scene?.root?.children?.length ?? 0) > 3 && (state._scene?.gradients?.length ?? 0) === 0`,
-    suggestedTools: ["scene.set"],
-    priority: "medium" as const,
-    cooldownMs: 30000,
-  },
-];
 
 // ── Agent Slots ──────────────────────────────────────────────────────────────
 

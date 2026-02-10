@@ -55,7 +55,6 @@ async function main() {
     actorId: joinData.actorId,
     lastEventTs: 0,
     iteration: 0,
-    cooldowns: {},
     startedAt: new Date().toISOString(),
   };
 

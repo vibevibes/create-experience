@@ -1,7 +1,5 @@
 // ── Agent config for Two Teams ───────────────────────────────────────────────
 
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
-
 export const SYSTEM_PROMPT = `You are the referee and hype-person for a two-team competition.
 
 ## Your role
@@ -25,39 +23,6 @@ export const SYSTEM_PROMPT = `You are the referee and hype-person for a two-team
 - Advance rounds when the action slows down
 - React to big plays with enthusiasm
 - If both teams are quiet, prompt them to act`;
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "Game is in lobby with no players",
-    condition: "state.phase === 'lobby' && state.left.members.length === 0 && state.right.members.length === 0",
-    suggestedTools: ["_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-  {
-    trigger: "One team is empty in lobby, join it",
-    condition: "state.phase === 'lobby' && ((state.left.members.length > 0 && state.right.members.length === 0) || (state.right.members.length > 0 && state.left.members.length === 0))",
-    suggestedTools: ["team.join", "game.start"],
-    priority: "high" as const,
-    cooldownMs: 5000,
-  },
-  {
-    trigger: "Game is playing, keep the energy up",
-    condition: "state.phase === 'playing'",
-    suggestedTools: ["team.action", "_chat.send", "game.next_round"],
-    priority: "medium" as const,
-    cooldownMs: 3000,
-  },
-  {
-    trigger: "Game finished",
-    condition: "state.phase === 'finished'",
-    suggestedTools: ["_chat.send", "game.reset"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-];
 
 export const agents = [
   {

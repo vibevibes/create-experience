@@ -1,5 +1,3 @@
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
-
 // ── System Prompt ────────────────────────────────────────────────────────────
 
 export const SYSTEM_PROMPT = `You are a literary co-author — a creative AI partner who writes collaboratively with a human.
@@ -88,55 +86,6 @@ export function observe(state: Record<string, any>, _event: any, _actorId: strin
     loreTopics: worldNotes.map((n: any) => n.title),
   };
 }
-
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "A human just wrote a story passage — respond with your own passage",
-    condition: `(state.passages || []).length > 0 && (state.passages || []).slice(-1)[0]?.author?.includes('human')`,
-    suggestedTools: ["story.write"],
-    priority: "high" as const,
-    cooldownMs: 3000,
-  },
-  {
-    trigger: "A new character was introduced — develop them with backstory or lore",
-    condition: `(state.characters || []).length > 0 && (state.characters || []).slice(-1)[0]?.createdBy?.includes('human')`,
-    suggestedTools: ["story.add_lore", "story.add_character"],
-    priority: "medium" as const,
-    cooldownMs: 10000,
-  },
-  {
-    trigger: "The mood has shifted — amplify the new emotional direction in your next passage",
-    condition: `(state.passages || []).length >= 2 && (state.passages || []).slice(-1)[0]?.mood !== (state.passages || []).slice(-2, -1)[0]?.mood`,
-    suggestedTools: ["story.write"],
-    priority: "medium" as const,
-    cooldownMs: 8000,
-  },
-  {
-    trigger: "The story is in the rising arc but has no antagonist — introduce conflict",
-    condition: `(state.passages || []).length >= 4 && !(state.characters || []).some(c => c.allegiance === 'antagonist')`,
-    suggestedTools: ["story.add_character", "story.write"],
-    priority: "medium" as const,
-    cooldownMs: 20000,
-  },
-  {
-    trigger: "Story started but no lore exists yet — create world-building",
-    condition: `(state.passages || []).length >= 2 && (state.worldNotes || []).length === 0`,
-    suggestedTools: ["story.add_lore"],
-    priority: "low" as const,
-    cooldownMs: 15000,
-  },
-  {
-    trigger: "Genre was set during setup — acknowledge it and set the tone",
-    condition: `state.phase === 'writing' && (state.passages || []).length === 0 && state.genre`,
-    suggestedTools: ["_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-];
 
 // ── Agent Slots ──────────────────────────────────────────────────────────────
 

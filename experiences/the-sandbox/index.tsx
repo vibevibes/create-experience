@@ -9,7 +9,7 @@ import { defineExperience, createScene } from "@vibevibes/sdk";
 import { Canvas } from "./canvas";
 import { tools } from "./tools";
 import { tests } from "./tests";
-import { hints, agents } from "./agent";
+import { agents } from "./agent";
 import type { SandboxState } from "./types";
 
 // ── Initial State ────────────────────────────────────────────────────────────
@@ -41,7 +41,6 @@ export default defineExperience({
   },
   tools,
   Canvas,
-  hints,
   tests,
   initialState,
   agents,

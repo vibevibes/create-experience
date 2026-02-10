@@ -50,8 +50,8 @@ const CJS_BASE_SHIMS: Record<string, string> = {
   import_react: "{ default: React, __esModule: true, createElement: React.createElement, Fragment: React.Fragment, useState: React.useState, useEffect: React.useEffect, useCallback: React.useCallback, useMemo: React.useMemo, useRef: React.useRef }",
   import_zod: "{ z: z, default: z }",
   import_yjs: "{ default: Y }",
-  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
-  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, sceneHints: sceneHints, createSceneTools: createSceneTools, createSceneHints: createSceneHints, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, createRuleHints: createRuleHints, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, createChatHints: createChatHints, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, createBugReportHints: createBugReportHints, ReportBug: ReportBug } }",
+  import_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, createSceneTools: createSceneTools, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, ReportBug: ReportBug } }",
+  import_vibevibes_sdk: "{ defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, ReportBug: ReportBug, useBlob: useBlob, useUndo: useUndo, usePhase: usePhase, useParticipants: useParticipants, ColorPicker: ColorPicker, Slider: Slider, Button: Button, Badge: Badge, SceneRenderer: SceneRenderer, useSceneTweens: useSceneTweens, useParticleTick: useParticleTick, useSceneInteraction: useSceneInteraction, useSceneDrag: useSceneDrag, useSceneSelection: useSceneSelection, useSceneViewport: useSceneViewport, createScene: createScene, createNode: createNode, sceneTools: sceneTools, createSceneTools: createSceneTools, walkNodes: walkNodes, nodeById: nodeById, findNodes: findNodes, allNodeIds: allNodeIds, nodeCount: nodeCount, cloneScene: cloneScene, removeNodeById: removeNodeById, findParent: findParent, PathBuilder: PathBuilder, createSceneSchemas: createSceneSchemas, easingFunctions: easingFunctions, interpolateTween: interpolateTween, createRuleTools: createRuleTools, ruleTools: ruleTools, useRuleTick: useRuleTick, nodeMatchesSelector: nodeMatchesSelector, default: { defineExperience: defineExperience, defineTool: defineTool, defineTest: defineTest, defineStream: defineStream, quickTool: quickTool, phaseTool: phaseTool, undoTool: undoTool, defineRoomConfig: defineRoomConfig, createChatTools: createChatTools, useChat: useChat, ChatPanel: ChatPanel, createBugReportTools: createBugReportTools, ReportBug: ReportBug } }",
 };
 
 /**
@@ -156,11 +156,9 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
 
   // Stubs for browser-only components and hooks (referenced in CJS shims)
   const createChatTools = (sdk as any).createChatTools ?? (() => []);
-  const createChatHints = (sdk as any).createChatHints ?? (() => []);
   const useChat = noop;
   const ChatPanel = noop;
   const createBugReportTools = (sdk as any).createBugReportTools ?? (() => []);
-  const createBugReportHints = (sdk as any).createBugReportHints ?? (() => []);
   const ReportBug = noop;
   const useBlob = noop;
   const useUndo = noop;
@@ -182,9 +180,7 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
   const createScene = (sdk as any).createScene ?? ((opts: any) => ({ _sceneVersion: 1, root: { id: 'root', type: 'group', children: [] }, camera: { x: 400, y: 300, zoom: 1 }, background: opts?.background ?? '#1a1a2e', width: opts?.width ?? 800, height: opts?.height ?? 600, gradients: [], filters: [] }));
   const createNode = (sdk as any).createNode ?? noop;
   const sceneTools = (sdk as any).sceneTools ?? (() => []);
-  const sceneHints = (sdk as any).sceneHints ?? (() => []);
   const createSceneTools = (sdk as any).createSceneTools ?? (() => []);
-  const createSceneHints = (sdk as any).createSceneHints ?? (() => []);
   const walkNodes = (sdk as any).walkNodes ?? noop;
   const nodeById = (sdk as any).nodeById ?? noop;
   const findNodes = (sdk as any).findNodes ?? (() => []);
@@ -200,7 +196,6 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
 
   // Rule engine exports
   const createRuleTools = (sdk as any).createRuleTools ?? (() => []);
-  const createRuleHints = (sdk as any).createRuleHints ?? (() => []);
   const ruleTools = (sdk as any).ruleTools ?? (() => []);
   const useRuleTick = noop;
   const nodeMatchesSelector = (sdk as any).nodeMatchesSelector ?? (() => false);
@@ -209,17 +204,17 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
     "React", "Y", "z",
     "defineExperience", "defineTool", "defineTest", "defineStream", "quickTool", "phaseTool", "undoTool",
     "defineRoomConfig",
-    "createChatTools", "createChatHints", "useChat", "ChatPanel",
-    "createBugReportTools", "createBugReportHints", "ReportBug",
+    "createChatTools", "useChat", "ChatPanel",
+    "createBugReportTools", "ReportBug",
     "useBlob", "useUndo", "usePhase", "useParticipants", "ColorPicker", "Slider", "Button", "Badge",
     "SceneRenderer", "useSceneTweens", "useParticleTick",
     "useSceneInteraction", "useSceneDrag", "useSceneSelection", "useSceneViewport",
-    "createScene", "createNode", "sceneTools", "sceneHints",
-    "createSceneTools", "createSceneHints",
+    "createScene", "createNode", "sceneTools",
+    "createSceneTools",
     "walkNodes", "nodeById", "findNodes", "allNodeIds", "nodeCount",
     "cloneScene", "removeNodeById", "findParent",
     "PathBuilder", "createSceneSchemas", "easingFunctions", "interpolateTween",
-    "createRuleTools", "createRuleHints", "ruleTools", "useRuleTick", "nodeMatchesSelector",
+    "createRuleTools", "ruleTools", "useRuleTick", "nodeMatchesSelector",
     "require", "exports", "module", "console",
     `"use strict";\n${serverCode}\nreturn typeof __experience_export__ !== 'undefined' ? __experience_export__ : (typeof module !== 'undefined' ? module.exports : undefined);`
   );
@@ -229,17 +224,17 @@ export async function evalServerBundle(serverCode: string): Promise<any> {
     stubReact, {}, z,
     defineExperience, defineTool, defineTest, defineStream, quickTool, phaseTool, undoTool,
     defineRoomConfig,
-    createChatTools, createChatHints, useChat, ChatPanel,
-    createBugReportTools, createBugReportHints, ReportBug,
+    createChatTools, useChat, ChatPanel,
+    createBugReportTools, ReportBug,
     useBlob, useUndo, usePhase, useParticipants, ColorPicker, Slider, Button, Badge,
     SceneRenderer, useSceneTweens, useParticleTick,
     useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport,
-    createScene, createNode, sceneTools, sceneHints,
-    createSceneTools, createSceneHints,
+    createScene, createNode, sceneTools,
+    createSceneTools,
     walkNodes, nodeById, findNodes, allNodeIds, nodeCount,
     cloneScene, removeNodeById, findParent,
     PathBuilder, createSceneSchemas, easingFunctions, interpolateTween,
-    createRuleTools, createRuleHints, ruleTools, useRuleTick, nodeMatchesSelector,
+    createRuleTools, ruleTools, useRuleTick, nodeMatchesSelector,
     () => ({}), fakeModule.exports, fakeModule, console,
   );
 
@@ -309,10 +304,8 @@ const { useToolCall, useSharedState, useOptimisticTool, useParticipants, useAnim
 const { Button, Card, Input, Badge, Stack, Grid, Slider, Textarea, Modal, ColorPicker, Dropdown, Tabs, ChatPanel, ReportBug } = globalThis.vibevibesComponents || {};
 const undoTool = globalThis.undoTool || (() => ({}));
 const createChatTools = globalThis.createChatTools || (() => []);
-const createChatHints = globalThis.createChatHints || (() => []);
 const createBugReportTools = globalThis.createBugReportTools || (() => []);
-const createBugReportHints = globalThis.createBugReportHints || (() => []);
-const { SceneRenderer, useSceneTweens, useParticleTick, useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport, createScene, createNode, sceneTools, sceneHints, createSceneTools, createSceneHints, walkNodes, nodeById, findNodes, allNodeIds, nodeCount, cloneScene, removeNodeById, findParent, PathBuilder, createSceneSchemas, easingFunctions, interpolateTween, createRuleTools, createRuleHints, ruleTools, useRuleTick, nodeMatchesSelector } = globalThis.vibevibesScene || {};
+const { SceneRenderer, useSceneTweens, useParticleTick, useSceneInteraction, useSceneDrag, useSceneSelection, useSceneViewport, createScene, createNode, sceneTools, createSceneTools, walkNodes, nodeById, findNodes, allNodeIds, nodeCount, cloneScene, removeNodeById, findParent, PathBuilder, createSceneSchemas, easingFunctions, interpolateTween, createRuleTools, ruleTools, useRuleTick, nodeMatchesSelector } = globalThis.vibevibesScene || {};
 `;
 
   // When multiple files import the same external, esbuild ESM creates numbered

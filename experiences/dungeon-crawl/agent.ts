@@ -1,4 +1,3 @@
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
 import { GRID_SIZE } from "./types";
 import type { DungeonState, Tile } from "./types";
 
@@ -43,55 +42,6 @@ You build the dungeon AHEAD of the player. As they explore and reveal tiles, you
 - Don't overwrite the tile the player is currently standing on.
 - Build incrementally — 5-15 tiles at a time, not the whole dungeon at once.
 - React to every player movement with new content and narration.`;
-
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "Game just started — player entered exploring phase, build initial dungeon room",
-    condition: `state.phase === "exploring" && (state.turnCount ?? 0) === 0`,
-    suggestedTools: ["dungeon.narrate", "dungeon.place_tiles", "dungeon.add_entity"],
-    priority: "high" as const,
-    cooldownMs: 5000,
-  },
-  {
-    trigger: "Player moved — reveal area and build ahead of them",
-    condition: `state.phase === "exploring" && (state.turnCount ?? 0) > 0`,
-    suggestedTools: ["dungeon.place_tiles", "dungeon.add_entity", "dungeon.narrate"],
-    priority: "high" as const,
-    cooldownMs: 2000,
-  },
-  {
-    trigger: "Encounter started — narrate the encounter and offer choices",
-    condition: `state.phase === "encounter" && state.encounter && (state.encounterChoices ?? []).length === 0`,
-    suggestedTools: ["dungeon.narrate"],
-    priority: "high" as const,
-    cooldownMs: 1000,
-  },
-  {
-    trigger: "Player HP is low — create tension or offer mercy",
-    condition: `state.player?.hp <= 30 && state.player?.hp > 0 && state.phase === "exploring"`,
-    suggestedTools: ["dungeon.narrate", "dungeon.add_entity"],
-    priority: "medium" as const,
-    cooldownMs: 15000,
-  },
-  {
-    trigger: "Player has explored many tiles — consider placing the exit",
-    condition: `state.phase === "exploring" && state.grid?.flat?.()?.filter?.(t => t?.revealed)?.length > ${Math.floor(GRID_SIZE * GRID_SIZE * 0.4)}`,
-    suggestedTools: ["dungeon.place_tiles", "dungeon.narrate"],
-    priority: "medium" as const,
-    cooldownMs: 30000,
-  },
-  {
-    trigger: "Player chose an action during encounter (chat message from human)",
-    condition: `state.phase === "encounter" && (state._chat ?? []).length > 0 && (state._chat ?? []).slice(-1)[0]?.actorId?.includes("human")`,
-    suggestedTools: ["dungeon.narrate", "player.pickup", "_phase.set"],
-    priority: "high" as const,
-    cooldownMs: 2000,
-  },
-];
 
 // ── Agent Slots ──────────────────────────────────────────────────────────────
 

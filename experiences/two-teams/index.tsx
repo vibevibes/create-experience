@@ -9,7 +9,7 @@ import { defineExperience } from "@vibevibes/sdk";
 import { Canvas } from "./canvas";
 import { tools } from "./tools";
 import { tests } from "./tests";
-import { hints, agents } from "./agent";
+import { agents } from "./agent";
 import { initialState } from "./utils";
 
 export default defineExperience({
@@ -23,7 +23,6 @@ export default defineExperience({
   },
   tools,
   Canvas,
-  hints,
   tests,
   initialState,
   agents,

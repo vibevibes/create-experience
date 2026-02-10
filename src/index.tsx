@@ -1,4 +1,4 @@
-import { defineExperience, createChatTools, createChatHints } from "@vibevibes/sdk";
+import { defineExperience, createChatTools } from "@vibevibes/sdk";
 import { z } from "zod";
 import { Canvas } from "./canvas";
 
@@ -40,7 +40,4 @@ Your job:
   Canvas,
   tools: [...createChatTools(z)],
   initialState: { _chat: [] },
-  agentHints: [
-    ...createChatHints(),
-  ],
 });

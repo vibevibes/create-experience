@@ -101,11 +101,6 @@ async function main() {
   }
   state.iteration = (state.iteration || 0) + 1;
 
-  // Merge cooldowns from hint evaluation (if server returns them)
-  if (agentContext.cooldowns) {
-    state.cooldowns = { ...state.cooldowns, ...agentContext.cooldowns };
-  }
-
   try {
     writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   } catch {

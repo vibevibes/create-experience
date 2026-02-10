@@ -219,9 +219,7 @@
         createScene: sdk.createScene,
         createNode: sdk.createNode,
         sceneTools: sdk.sceneTools,
-        sceneHints: sdk.sceneHints,
         createSceneTools: sdk.createSceneTools,
-        createSceneHints: sdk.createSceneHints,
         createSceneSchemas: sdk.createSceneSchemas,
         walkNodes: sdk.walkNodes,
         nodeById: sdk.nodeById,
@@ -235,7 +233,6 @@
         easingFunctions: sdk.easingFunctions,
         interpolateTween: sdk.interpolateTween,
         createRuleTools: sdk.createRuleTools,
-        createRuleHints: sdk.createRuleHints,
         ruleTools: sdk.ruleTools,
         useRuleTick: sdk.useRuleTick,
         nodeMatchesSelector: sdk.nodeMatchesSelector,
@@ -511,10 +508,6 @@
       },
     ];
 
-    globalThis.createChatHints = () => [
-      { trigger: "A new chat message was sent by a human participant", condition: `(state._chat || []).length > 0 && (state._chat || []).slice(-1)[0]?.actorId?.includes('human')`, suggestedTools: ["_chat.send"], priority: "medium", cooldownMs: 2000 },
-    ];
-
     // ── Bug report tools ──────────────────────────────────────
     globalThis.createBugReportTools = (zod) => [
       {
@@ -529,10 +522,6 @@
           return { reportId: report.id, totalReports: reports.length };
         },
       },
-    ];
-
-    globalThis.createBugReportHints = () => [
-      { trigger: "A new bug report was submitted", condition: `(state._bugReports || []).some(r => r.status === 'open')`, suggestedTools: [], priority: "low", cooldownMs: 10000 },
     ];
 
     // ── useChat hook ──────────────────────────────────────────

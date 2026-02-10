@@ -1,5 +1,3 @@
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
-
 // ── System Prompt ────────────────────────────────────────────────────────────
 
 export const SYSTEM_PROMPT = `You are the Analyst — a data-driven AI that loves finding patterns, correlations, and hidden insights in data.
@@ -41,48 +39,6 @@ export const SYSTEM_PROMPT = `You are the Analyst — a data-driven AI that love
 - Metric panels should summarize: totals, averages, deltas
 - List panels are great for ranked insights or action items
 - Note panels are your primary insight delivery mechanism`;
-
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "New data points were added — analyze and provide insights",
-    condition: `(state.dataPoints || []).length > 0 && Date.now() - (state.lastActivity || 0) < 5000`,
-    suggestedTools: ["panel.add", "_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-  {
-    trigger: "Dashboard has panels — check layout and suggest improvements",
-    condition: `(state.panels || []).length > 2`,
-    suggestedTools: ["panel.update", "panel.add", "_chat.send"],
-    priority: "medium" as const,
-    cooldownMs: 30000,
-  },
-  {
-    trigger: "Periodic trend check — look for patterns in accumulated data",
-    condition: `(state.dataPoints || []).length >= 3`,
-    suggestedTools: ["panel.add", "data.add", "_chat.send"],
-    priority: "low" as const,
-    cooldownMs: 30000,
-  },
-  {
-    trigger: "Dashboard is empty — suggest getting started",
-    condition: `(state.panels || []).length === 0 && (state.dataPoints || []).length === 0`,
-    suggestedTools: ["_chat.send", "panel.add", "data.add"],
-    priority: "high" as const,
-    cooldownMs: 15000,
-  },
-  {
-    trigger: "Multiple categories exist — compare and correlate",
-    condition: `(state.categories || []).length >= 2`,
-    suggestedTools: ["panel.add", "_chat.send"],
-    priority: "medium" as const,
-    cooldownMs: 30000,
-  },
-];
 
 // ── Observe (curate what the agent sees) ─────────────────────────────────────
 

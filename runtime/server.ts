@@ -903,9 +903,7 @@ app.get("/events/all", (req, res) => {
   });
 });
 
-// ── Agent context (combined events + observe + hints for Stop hook) ──
-
-const agentCooldowns = new Map<string, Record<string, number>>();
+// ── Agent context (combined events + observe for Stop hook) ──
 
 app.get("/agent-context", (req, res) => {
   const since = parseInt(req.query.since as string) || 0;
@@ -914,51 +912,17 @@ app.get("/agent-context", (req, res) => {
 
   // Gather events from ALL rooms (not just default) so the agent sees sub-room activity
   const getAllNewEvents = () => {
+    const requestingOwner = actorId.split("-")[0]; // "claude-ai-1" → "claude"
     const allEvents: (ToolEvent & { roomId: string })[] = [];
     for (const room of rooms.values()) {
       for (const e of room.events) {
-        if (e.ts > since && e.actorId !== actorId) {
+        const eventOwner = (e as any).owner || e.actorId.split("-")[0];
+        if (e.ts > since && eventOwner !== requestingOwner) {
           allEvents.push({ ...e, roomId: room.id });
         }
       }
     }
     return allEvents.sort((a, b) => a.ts - b.ts);
-  };
-
-  // Evaluate hints across all rooms
-  const evaluateAllHints = () => {
-    const allFired: Array<{ trigger: string; suggestedTools: string[]; priority: string; roomId: string }> = [];
-    const cooldowns = agentCooldowns.get(actorId) || {};
-    const now = Date.now();
-
-    for (const room of rooms.values()) {
-      const exp = getExperienceForRoom(room);
-      const hints = exp?.module?.agentHints || [];
-      for (const hint of hints) {
-        const key = `${room.id}:${hint.trigger}`;
-        const lastFired = cooldowns[key] || 0;
-        const cooldownMs = hint.cooldownMs || 5000;
-        if (now - lastFired < cooldownMs) continue;
-
-        if (hint.condition) {
-          try {
-            const fn = new Function("state", "actorId", `return ${hint.condition}`);
-            if (!fn(room.sharedState, actorId)) continue;
-          } catch { continue; }
-        }
-
-        cooldowns[key] = now;
-        allFired.push({
-          trigger: hint.trigger,
-          suggestedTools: hint.suggestedTools,
-          priority: hint.priority || "medium",
-          roomId: room.id,
-        });
-      }
-    }
-
-    agentCooldowns.set(actorId, cooldowns);
-    return allFired;
   };
 
   // Collect all participants and available tools across rooms
@@ -985,7 +949,6 @@ app.get("/agent-context", (req, res) => {
 
   const buildResponse = () => {
     const events = getAllNewEvents();
-    const firedHints = evaluateAllHints();
     // Compute observation from default room for backward compat
     const defaultRoom = getDefaultRoom();
     const defaultExp = getExperienceForRoom(defaultRoom);
@@ -999,7 +962,6 @@ app.get("/agent-context", (req, res) => {
     return {
       events,
       observation: observation || {},
-      firedHints,
       participants: getAllParticipants(),
       rooms: getAllRoomInfo(),
     };

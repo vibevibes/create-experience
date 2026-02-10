@@ -40,46 +40,6 @@ export const SYSTEM_PROMPT = `You are Vex, the Elemental Trickster — a sharp, 
 - During scoring, calculate and announce results.
 - Keep the energy up. This is a game, not a chore.`;
 
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  {
-    trigger: "It is the AI's turn to play",
-    condition: `(state.phase === "playing") && (state.players?.[state.currentPlayerIndex]?.isAI === true)`,
-    suggestedTools: ["game.play", "game.pass", "game.draw"],
-    priority: "high" as const,
-    cooldownMs: 2000,
-  },
-  {
-    trigger: "Game is in dealing phase — AI should draw cards",
-    condition: `state.phase === "dealing"`,
-    suggestedTools: ["game.draw", "_phase.set"],
-    priority: "high" as const,
-    cooldownMs: 3000,
-  },
-  {
-    trigger: "Human played a special effect card — react to it",
-    condition: `state.lastAction?.includes("effect:") && !state.players?.[state.currentPlayerIndex]?.isAI`,
-    suggestedTools: ["game.play", "game.draw"],
-    priority: "medium" as const,
-    cooldownMs: 5000,
-  },
-  {
-    trigger: "Scoring phase — tally results and announce winner",
-    condition: `state.phase === "scoring"`,
-    suggestedTools: ["_phase.set"],
-    priority: "high" as const,
-    cooldownMs: 5000,
-  },
-  {
-    trigger: "Game in lobby — waiting for players",
-    condition: `state.phase === "lobby" && (state.players?.length ?? 0) >= 2`,
-    suggestedTools: ["_phase.set"],
-    priority: "medium" as const,
-    cooldownMs: 10000,
-  },
-];
-
 // ── Agent Slots ──────────────────────────────────────────────────────────────
 
 export const agents = [

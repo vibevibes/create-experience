@@ -18,7 +18,7 @@ import { defineExperience } from "@vibevibes/sdk";
 import { Canvas } from "./canvas";
 import { tools } from "./tools";
 import { tests } from "./tests";
-import { hints, agents, observe } from "./agent";
+import { agents, observe } from "./agent";
 import type { DashboardState } from "./types";
 
 // ── State Schema ────────────────────────────────────────────────────────────
@@ -73,7 +73,6 @@ export default defineExperience({
   Canvas,
   tools,
   tests,
-  hints,
   agents,
   observe,
   initialState,

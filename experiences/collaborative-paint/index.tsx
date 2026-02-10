@@ -10,9 +10,7 @@ import {
   ChatPanel,
   ReportBug,
   createChatTools,
-  createChatHints,
   createBugReportTools,
-  createBugReportHints,
 } from "@vibevibes/sdk";
 import type { StrokePoint, PaintingState } from "./types";
 import { hexToRgb, createBlankPixels, paintCircle, paintLine } from "./utils";
@@ -544,31 +542,6 @@ Guidelines:
   streams: [brushStream],
   observe,
   initialState,
-  agentHints: [
-    ...createChatHints(),
-    ...createBugReportHints(),
-    {
-      trigger: "Human is actively painting many strokes",
-      condition: `(state.strokeBuffer || []).length > 50`,
-      suggestedTools: ["_chat.send"],
-      priority: "low" as const,
-      cooldownMs: 30000,
-    },
-    {
-      trigger: "Canvas was just cleared — good time to suggest a theme",
-      condition: `state.totalStrokes === 0 && !state.canvasBlobKey`,
-      suggestedTools: ["canvas.fill_region", "_chat.send"],
-      priority: "medium" as const,
-      cooldownMs: 10000,
-    },
-    {
-      trigger: "Stroke buffer is large and needs committing",
-      condition: `(state.strokeBuffer || []).length > 500`,
-      suggestedTools: ["canvas.commit"],
-      priority: "high" as const,
-      cooldownMs: 5000,
-    },
-  ],
   tests: [
     defineTest({
       name: "canvas.clear resets state",

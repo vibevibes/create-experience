@@ -1,4 +1,3 @@
-import { createChatHints, createBugReportHints } from "@vibevibes/sdk";
 import type { SequencerState, Track } from "./types";
 import { INSTRUMENTS, INSTRUMENT_COUNT, STEP_COUNT } from "./types";
 
@@ -57,55 +56,6 @@ export const SYSTEM_PROMPT = `You are the Producer — a musically literate AI c
 - 16 steps per track (16th notes in a single bar)
 - Always complement the human's choices — don't overwrite their work
 - Use seq.set_track for laying down complete ideas, seq.toggle for fine edits`;
-
-// ── Hints ────────────────────────────────────────────────────────────────────
-
-export const hints = [
-  ...createChatHints(),
-  ...createBugReportHints(),
-  {
-    trigger: "Human added beats to a track — complement with a related pattern",
-    condition: `(state.tracks || []).some(t => t.pattern.filter(s => s.active).length > 0) && (state.tracks || []).some(t => t.pattern.filter(s => s.active).length === 0)`,
-    suggestedTools: ["seq.set_track", "_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 8000,
-  },
-  {
-    trigger: "Pattern is sparse (< 10 active steps total) — suggest a fill or groove",
-    condition: `(state.tracks || []).reduce((sum, t) => sum + t.pattern.filter(s => s.active).length, 0) < 10 && (state.tracks || []).reduce((sum, t) => sum + t.pattern.filter(s => s.active).length, 0) > 0`,
-    suggestedTools: ["seq.set_track", "seq.randomize", "_chat.send"],
-    priority: "medium" as const,
-    cooldownMs: 15000,
-  },
-  {
-    trigger: "All tracks are empty — suggest a starting point",
-    condition: `(state.tracks || []).every(t => t.pattern.every(s => !s.active))`,
-    suggestedTools: ["seq.set_track", "_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-  {
-    trigger: "Pattern is dense (> 50 active steps) — suggest variation or breakdown",
-    condition: `(state.tracks || []).reduce((sum, t) => sum + t.pattern.filter(s => s.active).length, 0) > 50`,
-    suggestedTools: ["seq.mute", "seq.clear_track", "_chat.send"],
-    priority: "medium" as const,
-    cooldownMs: 20000,
-  },
-  {
-    trigger: "BPM changed — consider adapting patterns to new tempo feel",
-    condition: `state.bpm !== 120`,
-    suggestedTools: ["seq.set_track", "_chat.send"],
-    priority: "low" as const,
-    cooldownMs: 30000,
-  },
-  {
-    trigger: "All tracks muted — offer to restart or suggest a new direction",
-    condition: `(state.tracks || []).every(t => t.muted)`,
-    suggestedTools: ["seq.mute", "seq.set_track", "_chat.send"],
-    priority: "high" as const,
-    cooldownMs: 10000,
-  },
-];
 
 // ── Observe ──────────────────────────────────────────────────────────────────
 
