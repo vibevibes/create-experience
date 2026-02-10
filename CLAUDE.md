@@ -2,6 +2,32 @@
 
 > You are building a **vibe-vibe experience**: a shared interactive app where humans (in the browser) and AI agents (via MCP tools) collaborate in real-time through a shared state managed by tools.
 
+---
+
+## Before You Write Code
+
+Answer these three questions first. Write them as comments at the top of `src/index.tsx` before writing any code.
+
+1. **The moment:** What's the single coolest thing that happens when human + AI play this together?
+2. **The loop:** Human does X → Agent responds with Y → Human builds on it → ... What's the core interaction cycle?
+3. **The surprise:** What does the agent do that the human didn't expect? Where does emergence live?
+
+These answers are your creative north star. Every tool, component, and hint you write should serve the loop.
+
+---
+
+## Creative Principles
+
+When building an experience, think in terms of **emergent interactions**, not features:
+
+- **Asymmetry is the point.** What can the human do that the agent can't? What can the agent do that the human can't? Where do those differences create something neither could make alone?
+- **Start with one compelling interaction loop**, not a feature list. A drawing app where the AI colorizes your sketches > a drawing app with 20 brush tools.
+- **State is the shared imagination.** Design your state shape to be *legible to the agent* — flat keys, descriptive names, meaningful values. An agent reasons about `{ mood: "tense", threatLevel: 3 }` better than `{ m: 2, tl: 3 }`.
+- **Agent hints are your creative direction.** Use them to make the agent *surprising* — hints that fire on unexpected conditions create the moments humans share with friends.
+- **Let the agent be an author, not a servant.** The best experiences give the agent creative latitude. Don't micromanage every response — give it a role and let it surprise you.
+
+---
+
 ## IMPORTANT: Use the LOCAL MCP tools
 
 This project registers a **local** MCP server (`vibevibes` in `.mcp.json`) via the published `@vibevibes/mcp` npm package. It exposes 5 tools: `connect`, `watch`, `act`, `memory`, `screenshot`. These talk to the **local dev server** at http://localhost:4321.
@@ -15,9 +41,13 @@ This project registers a **local** MCP server (`vibevibes` in `.mcp.json`) via t
 ```
 src/                   <- YOUR EXPERIENCE CODE
   index.tsx            <- Entry point (must export default defineExperience)
-  components.tsx       <- UI components (optional, import from index.tsx)
-  utils.ts             <- Helpers, constants, logic (optional)
-  types.ts             <- TypeScript types (optional)
+  tools.ts             <- Tool definitions (defineTool, quickTool, tool factories)
+  canvas.tsx           <- Canvas component and sub-components
+  components.tsx       <- Reusable UI components and custom hooks
+  agent.ts             <- Agent system prompt, hints, slots
+  types.ts             <- TypeScript types and Zod schemas
+  utils.ts             <- Pure helper functions, constants
+  tests.ts             <- All defineTest definitions
 runtime/               <- Local dev runtime. Don't modify.
   server.ts            <- Express + WebSocket server
   tunnel.ts            <- Cloudflare Tunnel for --share mode
@@ -25,6 +55,28 @@ runtime/               <- Local dev runtime. Don't modify.
   viewer/index.html    <- Browser viewer
 .mcp.json              <- Auto-registers vibevibes-mcp with Claude Code
 ```
+
+### File Organization (MANDATORY)
+
+**No single file may exceed 300 lines.** Split aggressively. Readability is non-negotiable.
+
+| File | Contains | Exports |
+|------|----------|---------|
+| `src/index.tsx` | Experience wiring only — imports everything else, calls `defineExperience` | `default defineExperience(...)` |
+| `src/tools.ts` | All `defineTool` / `quickTool` definitions, tool factory functions | `tools` array |
+| `src/canvas.tsx` | The `Canvas` component, sub-components it renders | `Canvas` component |
+| `src/components.tsx` | Reusable UI components, custom hooks | Named exports |
+| `src/agent.ts` | System prompt string, agent hints array, agent slot configs | `SYSTEM_PROMPT`, `hints`, `agents` |
+| `src/types.ts` | TypeScript types, Zod schemas, interfaces | Type exports |
+| `src/utils.ts` | Pure helper functions, constants, config values | Named exports |
+| `src/tests.ts` | All `defineTest` definitions | `tests` array |
+
+**If any file approaches 300 lines, split it further.** For example:
+- `src/tools/scene-tools.ts`, `src/tools/game-tools.ts` for large tool sets
+- `src/components/hud.tsx`, `src/components/toolbar.tsx` for complex UIs
+- `src/canvas/main.tsx`, `src/canvas/overlays.tsx` for layered canvases
+
+The bundler resolves all imports from `src/` automatically. There is no penalty for more files.
 
 ---
 
@@ -76,14 +128,17 @@ connect → watch → (event arrives) → act → watch → (event arrives) → 
 
 ## Building an Experience
 
-An experience is a multi-file project in `src/`. The entry point `src/index.tsx` must export a default `defineExperience`:
+An experience is a **multi-file** project in `src/`. The entry point `src/index.tsx` must export a default `defineExperience` — but it should be a **thin wiring file** that imports everything from other modules:
 
 ```tsx
-import { defineExperience, defineTool } from "@vibevibes/sdk";
-import { z } from "zod";
-import React from "react";
-import { MyComponent } from "./components";
-import { helpers } from "./utils";
+// src/index.tsx — KEEP THIS FILE SHORT (under 80 lines)
+import { defineExperience } from "@vibevibes/sdk";
+import { Canvas } from "./canvas";
+import { tools } from "./tools";
+import { tests } from "./tests";
+import { SYSTEM_PROMPT, hints, agents } from "./agent";
+import { observe } from "./agent";
+import { initialState } from "./utils";
 
 export default defineExperience({
   manifest: {
@@ -93,13 +148,17 @@ export default defineExperience({
     description: "What this does",
     requested_capabilities: [],
   },
-  Canvas,   // React component — renders the UI
-  tools,    // Array of ToolDef — mutate shared state
-  tests,    // Optional: inline tests via defineTest
+  Canvas,
+  tools,
+  tests,
+  hints,
+  agents,
+  observe,
+  initialState,
 });
 ```
 
-You can split code across multiple files in `src/` — the bundler resolves imports automatically. The dev server watches all files in `src/` and hot-reloads on any change.
+The bundler resolves all imports from `src/` automatically. The dev server watches all files in `src/` and hot-reloads on any change. **Every file should have a single responsibility.**
 
 ### Canvas Component
 
@@ -244,9 +303,71 @@ agentHints: [
 ]
 ```
 
+### Observe Function (curate what agents see)
+
+Instead of dumping raw state to the agent, define an `observe` function to curate a *narrative* of the current state. This is your director's chair — it shapes how the agent perceives the world.
+
+```tsx
+// In src/agent.ts
+export function observe(state: Record<string, any>, event: any, actorId: string) {
+  return {
+    summary: `The board has ${state.pieces?.length ?? 0} pieces`,
+    recentMove: state.lastMove,
+    mood: state.tension > 5 ? "escalating" : "calm",
+    playerCount: state.participants?.length ?? 1,
+    // Don't expose internal implementation details — give the agent
+    // high-level concepts it can reason about creatively
+  };
+}
+
+// In src/index.tsx
+export default defineExperience({
+  ...,
+  observe,
+});
+```
+
+The observe function fires every time state changes. The agent receives its output instead of raw state. Use it to:
+- Summarize complex state into readable concepts
+- Give the agent emotional/narrative context (`mood`, `tension`, `phase`)
+- Hide implementation details the agent doesn't need
+- Create information asymmetry that makes the agent's responses more interesting
+
+### Tool Factory Pattern (organize tool groups)
+
+For experiences with many tools, group related tools into factory functions. This keeps files short and makes tools reusable across experiences:
+
+```tsx
+// src/tools/combat.ts
+import { defineTool } from "@vibevibes/sdk";
+import { z } from "zod";
+
+export function combatTools(z_: typeof z) {
+  return [
+    defineTool({ name: "combat.attack", ... }),
+    defineTool({ name: "combat.defend", ... }),
+    defineTool({ name: "combat.flee", ... }),
+  ];
+}
+
+// src/tools.ts
+import { sceneTools, createChatTools } from "@vibevibes/sdk";
+import { combatTools } from "./tools/combat";
+import { inventoryTools } from "./tools/inventory";
+
+export const tools = [
+  ...sceneTools(z),
+  ...createChatTools(z),
+  ...combatTools(z),
+  ...inventoryTools(z),
+];
+```
+
+This mirrors how the SDK's own `sceneTools(z)`, `ruleTools(z)`, and `createChatTools(z)` work. Follow the same pattern for your custom tool groups.
+
 ### Tests (inline tool handler tests)
 
-Run with `npm test`. Define tests in your experience:
+Run with `npm test`. Define tests in your experience (put them in `src/tests.ts`):
 
 ```tsx
 import { defineTest } from "@vibevibes/sdk";
